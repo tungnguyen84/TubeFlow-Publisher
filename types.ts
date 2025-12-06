@@ -1,3 +1,4 @@
+
 export enum ChannelStatus {
   ACTIVE = 'ACTIVE',
   EXPIRED = 'EXPIRED',
@@ -22,9 +23,21 @@ export interface Channel {
   status: ChannelStatus;
   lastSync: string;
   tags: string[];
-  youtubeId: string; // ID thật trên YouTube (bắt đầu bằng UC...)
-  accessToken?: string; // Token lưu trong DB
-  tokenExpiresAt?: number; // Timestamp (ms) khi token hết hạn
+  youtubeId: string; 
+  
+  // Auth Data
+  accessToken?: string; 
+  refreshToken?: string; // MỚI: Dùng để lấy token mới khi hết hạn
+  tokenExpiresAt?: number; 
+  
+  // Config riêng cho từng kênh (Optional overrides)
+  clientId?: string;      // MỚI
+  clientSecret?: string;  // MỚI
+  
+  // Default Metadata
+  defaultTitle?: string;       // MỚI
+  defaultDescription?: string; // MỚI
+  defaultTags?: string[];      // MỚI
 }
 
 export interface ChannelGroup {
@@ -49,7 +62,7 @@ export interface VideoItem {
   resolution: string;
   status: VideoStatus;
   metadata: VideoMetadata;
-  filePath: string; // Virtual path reference
+  filePath: string; 
   scheduledTime?: string;
   targetChannelIds: string[];
 }
@@ -58,22 +71,37 @@ export interface Job {
   id: string;
   videoId: string;
   channelId: string;
-  videoTitle: string; // Cached for display
-  channelName: string; // Cached for display
-  status: 'QUEUED' | 'UPLOADING' | 'COMPLETED' | 'FAILED' | 'RETRYING' | 'PAUSED';
+  videoTitle: string; 
+  channelName: string; 
+  status: 'QUEUED' | 'UPLOADING' | 'COMPLETED' | 'FAILED' | 'RETRYING' | 'PAUSED' | 'QUOTA_LIMIT'; // MỚI: QUOTA_LIMIT
   progress: number;
   scheduledTime: string;
   errorMessage?: string;
   retries: number;
+  
+  // Data join để xử lý upload
+  accessToken?: string;
+  refreshToken?: string;
+  clientId?: string;
+  clientSecret?: string;
+  tokenExpiresAt?: number;
+  
+  channelDefaultMetadata?: {
+      title?: string;
+      description?: string;
+      tags?: string[];
+  };
+
+  videoMetadata?: VideoMetadata;
 }
 
 export interface AppSettings {
   supabaseUrl: string;
   supabaseKey: string;
-  youtubeApiKey: string; // Key để đọc Data public
-  googleClientId: string; // Key để hiện popup Login OAuth
+  youtubeApiKey: string; 
+  googleClientId: string; 
   maxConcurrentUploads: number;
-  uploadDelay: number; // ms
+  uploadDelay: number; 
   defaultVideoPath: string;
 }
 

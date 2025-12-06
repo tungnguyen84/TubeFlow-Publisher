@@ -1,3 +1,4 @@
+
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Job, VideoItem, Channel, AppSettings } from '../types';
 
@@ -5,16 +6,13 @@ import { Job, VideoItem, Channel, AppSettings } from '../types';
 const SUPABASE_URL = "https://yirtnjaxbtenoqbyfkxe.supabase.co";
 const SUPABASE_KEY = "sb_publishable_IoqoydoYYvPowv00SZL5pg_FWoFjV9L";
 
-// Khởi tạo ngay lập tức (Singleton)
 const supabaseInstance: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 export const getSupabase = (): SupabaseClient => {
   return supabaseInstance;
 };
 
-// Hàm này giữ lại để tương thích ngược, nhưng không cần gọi thủ công nữa
 export const initSupabase = (url: string, key: string) => {
-  console.log("Supabase đã được fix cứng kết nối.");
   return supabaseInstance;
 };
 
@@ -22,7 +20,7 @@ export const initSupabase = (url: string, key: string) => {
 
 // --- CHANNELS ---
 export const fetchChannels = async (): Promise<Channel[]> => {
-  const { data, error } = await supabaseInstance.from('channels').select('*');
+  const { data, error } = await supabaseInstance.from('channels').select('*').order('created_at', { ascending: false });
   if (error) {
     console.error("Lỗi lấy channels:", error);
     return [];
@@ -38,37 +36,85 @@ export const fetchChannels = async (): Promise<Channel[]> => {
     lastSync: new Date(row.last_sync).toLocaleString('vi-VN'),
     tags: row.tags || [],
     youtubeId: row.youtube_id,
+    
+    // Auth
     accessToken: row.access_token,
-    tokenExpiresAt: row.token_expires_at ? new Date(row.token_expires_at).getTime() : 0
+    refreshToken: row.refresh_token,
+    tokenExpiresAt: row.token_expires_at ? new Date(row.token_expires_at).getTime() : 0,
+    
+    // Custom Config
+    clientId: row.client_id,
+    clientSecret: row.client_secret,
+    
+    // Defaults
+    defaultTitle: row.default_title,
+    defaultDescription: row.default_description,
+    defaultTags: row.default_tags || []
   }));
 };
 
 export const addChannel = async (channel: Partial<Channel>) => {
-  // Thực tế cần OAuth, nhưng ở đây ta lưu metadata vào DB thật
   const { error } = await supabaseInstance.from('channels').insert({
     youtube_id: channel.id || Math.random().toString(36),
     name: channel.name,
     avatar_url: channel.avatarUrl,
     subscriber_count: channel.subscriberCount || 0,
     status: 'ACTIVE',
-    tags: channel.tags || []
+    tags: channel.tags || [],
+    // Lưu các cấu hình custom
+    client_id: channel.clientId,
+    client_secret: channel.clientSecret,
+    default_title: channel.defaultTitle,
+    default_description: channel.defaultDescription,
+    default_tags: channel.defaultTags
   });
   if (error) throw error;
 };
 
-// MỚI: Cập nhật Token vào DB
-export const updateChannelCredentials = async (id: string, accessToken: string, expiresInSeconds: number) => {
-    // Tính thời gian hết hạn
+// MỚI: Hàm cập nhật cấu hình kênh (Client ID, Secret, Metadata)
+export const updateChannelConfig = async (id: string, config: Partial<Channel>) => {
+    const updateData: any = {};
+    
+    // Chỉ update các trường có giá trị (cho phép chuỗi rỗng để xóa config cũ)
+    if (config.clientId !== undefined) updateData.client_id = config.clientId;
+    if (config.clientSecret !== undefined) updateData.client_secret = config.clientSecret;
+    if (config.defaultTitle !== undefined) updateData.default_title = config.defaultTitle;
+    if (config.defaultDescription !== undefined) updateData.default_description = config.defaultDescription;
+    if (config.defaultTags !== undefined) updateData.default_tags = config.defaultTags;
+
+    const { error } = await supabaseInstance.from('channels').update(updateData).eq('id', id);
+    if (error) throw error;
+};
+
+export const updateChannelCredentials = async (id: string, accessToken: string, refreshToken: string, expiresInSeconds: number) => {
     const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
     
-    const { error } = await supabaseInstance.from('channels').update({
+    const updateData: any = {
         access_token: accessToken,
         token_expires_at: expiresAt.toISOString(),
-        last_sync: new Date().toISOString()
-    }).eq('id', id);
+        last_sync: new Date().toISOString(),
+        status: 'ACTIVE' // Reset status về Active khi reconnect
+    };
+
+    // Chỉ update refresh token nếu có (đôi khi Google không trả lại refresh token nếu đã cấp rồi)
+    if (refreshToken) {
+        updateData.refresh_token = refreshToken;
+    }
+
+    const { error } = await supabaseInstance.from('channels').update(updateData).eq('id', id);
 
     if (error) throw error;
 };
+
+// Hàm cập nhật riêng Access Token (dùng khi Auto Refresh)
+export const updateChannelAccessTokenOnly = async (id: string, accessToken: string, expiresInSeconds: number) => {
+     const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
+     const { error } = await supabaseInstance.from('channels').update({
+        access_token: accessToken,
+        token_expires_at: expiresAt.toISOString(),
+    }).eq('id', id);
+    if (error) console.error("Lỗi update token mới:", error);
+}
 
 export const deleteChannel = async (id: string) => {
   const { error } = await supabaseInstance.from('channels').delete().eq('id', id);
@@ -97,13 +143,8 @@ export const fetchVideos = async (): Promise<VideoItem[]> => {
 };
 
 export const saveVideo = async (video: Partial<VideoItem>) => {
-  // Kiểm tra trùng lặp
   const { data: existing } = await supabaseInstance.from('videos').select('id').eq('filename', video.filename).single();
-  
-  if (existing) {
-    console.log("Video đã tồn tại, bỏ qua insert:", video.filename);
-    return; 
-  }
+  if (existing) return; 
 
   const { error } = await supabaseInstance.from('videos').insert({
     filename: video.filename,
@@ -138,13 +179,13 @@ export const createJob = async (job: Partial<Job>) => {
 };
 
 export const fetchJobs = async (): Promise<Job[]> => {
-  // Join videos and channels tables
+  // Join lấy đủ thông tin để Refresh Token và Default Metadata
   const { data, error } = await supabaseInstance
     .from('upload_jobs')
     .select(`
       id, status, scheduled_time, retries, error_log,
-      videos (title_template),
-      channels (name)
+      videos (title_template, desc_template, tags),
+      channels (name, access_token, refresh_token, token_expires_at, client_id, client_secret, default_title, default_description, default_tags)
     `)
     .order('created_at', { ascending: false });
   
@@ -160,33 +201,58 @@ export const fetchJobs = async (): Promise<Job[]> => {
     progress: row.status === 'COMPLETED' ? 100 : 0,
     scheduledTime: new Date(row.scheduled_time).toLocaleString('vi-VN'),
     retries: row.retries || 0,
-    errorMessage: row.error_log
+    errorMessage: row.error_log,
+
+    // Auth Data cho Upload
+    accessToken: row.channels?.access_token,
+    refreshToken: row.channels?.refresh_token,
+    tokenExpiresAt: row.channels?.token_expires_at ? new Date(row.channels?.token_expires_at).getTime() : 0,
+    clientId: row.channels?.client_id,
+    clientSecret: row.channels?.client_secret,
+
+    // Metadata
+    videoMetadata: {
+        title: row.videos?.title_template || '',
+        description: row.videos?.desc_template || '',
+        tags: row.videos?.tags || [],
+        visibility: 'public'
+    },
+    // Channel Defaults
+    channelDefaultMetadata: {
+        title: row.channels?.default_title,
+        description: row.channels?.default_description,
+        tags: row.channels?.default_tags || []
+    }
   }));
 };
+
+export const updateJobStatus = async (id: string, status: string, errorLog: string = '') => {
+    const { error } = await supabaseInstance.from('upload_jobs').update({
+        status: status,
+        error_log: errorLog
+    }).eq('id', id);
+    if (error) console.error("Update Job Error", JSON.stringify(error));
+}
 
 export const deleteJob = async (id: string) => {
     await supabaseInstance.from('upload_jobs').delete().eq('id', id);
 }
 
-// --- SYSTEM SETTINGS (Keys) ---
+// --- SETTINGS ---
 export const fetchSystemSettings = async (): Promise<{youtubeApiKey: string, googleClientId: string}> => {
   try {
     const { data, error } = await supabaseInstance.from('global_settings').select('*').single();
-    if (error || !data) {
-      return { youtubeApiKey: '', googleClientId: '' };
-    }
+    if (error || !data) return { youtubeApiKey: '', googleClientId: '' };
     return {
       youtubeApiKey: data.youtube_api_key || '',
       googleClientId: data.google_client_id || ''
     };
   } catch (e) {
-    console.warn("Chưa có bảng global_settings hoặc lỗi kết nối:", e);
     return { youtubeApiKey: '', googleClientId: '' };
   }
 };
 
 export const saveSystemSettings = async (youtubeApiKey: string, googleClientId: string) => {
-  // ID = 1 để đảm bảo chỉ có 1 dòng config (Singleton pattern trong DB)
   const { error } = await supabaseInstance.from('global_settings').upsert({
     id: 1,
     youtube_api_key: youtubeApiKey,
@@ -196,13 +262,13 @@ export const saveSystemSettings = async (youtubeApiKey: string, googleClientId: 
   if (error) throw error;
 };
 
-
+// Hàm Generate SQL cập nhật
 export const generateSchemaSQL = (): string => {
   return `
--- Enable UUID extension
+-- 1. Enable UUID
 create extension if not exists "uuid-ossp";
 
--- 1. Table: Global Settings (Lưu API Keys)
+-- 2. Table: Global Settings
 create table if not exists public.global_settings (
   id int primary key default 1,
   youtube_api_key text,
@@ -210,14 +276,10 @@ create table if not exists public.global_settings (
   updated_at timestamptz default now(),
   constraint single_row_const check (id = 1)
 );
-
--- RLS Settings (Drop trước để tránh lỗi)
 alter table public.global_settings enable row level security;
-drop policy if exists "Enable all access settings" on public.global_settings;
-create policy "Enable all access settings" on public.global_settings for all using (true) with check (true);
+create policy "Enable all" on public.global_settings for all using (true) with check (true);
 
-
--- 2. Table: Channels
+-- 3. Table: Channels (Đã update thêm cột)
 create table if not exists public.channels (
   id uuid primary key default uuid_generate_v4(),
   youtube_id text,
@@ -227,22 +289,31 @@ create table if not exists public.channels (
   status text default 'ACTIVE',
   tags text[],
   last_sync timestamptz default now(),
+  created_at timestamptz default now(),
+  -- Auth fields
   access_token text, 
+  refresh_token text,
   token_expires_at timestamptz,
-  created_at timestamptz default now()
+  client_id text,
+  client_secret text,
+  -- Defaults
+  default_title text,
+  default_description text,
+  default_tags text[]
 );
 
--- Update Columns
-alter table public.channels add column if not exists access_token text;
-alter table public.channels add column if not exists token_expires_at timestamptz;
+-- Cột mới (Nếu bảng đã có)
+alter table public.channels add column if not exists refresh_token text;
+alter table public.channels add column if not exists client_id text;
+alter table public.channels add column if not exists client_secret text;
+alter table public.channels add column if not exists default_title text;
+alter table public.channels add column if not exists default_description text;
+alter table public.channels add column if not exists default_tags text[];
 
--- RLS Channels
 alter table public.channels enable row level security;
-drop policy if exists "Enable all access channels" on public.channels;
-create policy "Enable all access channels" on public.channels for all using (true) with check (true);
+create policy "Enable all" on public.channels for all using (true) with check (true);
 
-
--- 3. Table: Videos
+-- 4. Table: Videos
 create table if not exists public.videos (
   id uuid primary key default uuid_generate_v4(),
   filename text not null,
@@ -255,14 +326,10 @@ create table if not exists public.videos (
   tags text[],
   created_at timestamptz default now()
 );
-
--- RLS Videos
 alter table public.videos enable row level security;
-drop policy if exists "Enable all access videos" on public.videos;
-create policy "Enable all access videos" on public.videos for all using (true) with check (true);
+create policy "Enable all" on public.videos for all using (true) with check (true);
 
-
--- 4. Table: Jobs
+-- 5. Table: Jobs
 create table if not exists public.upload_jobs (
   id uuid primary key default uuid_generate_v4(),
   video_id uuid references public.videos(id) on delete cascade,
@@ -273,10 +340,7 @@ create table if not exists public.upload_jobs (
   error_log text,
   created_at timestamptz default now()
 );
-
--- RLS Jobs
 alter table public.upload_jobs enable row level security;
-drop policy if exists "Enable all access jobs" on public.upload_jobs;
-create policy "Enable all access jobs" on public.upload_jobs for all using (true) with check (true);
+create policy "Enable all" on public.upload_jobs for all using (true) with check (true);
 `;
 };

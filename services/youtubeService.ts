@@ -1,3 +1,4 @@
+
 // Service tương tác với YouTube Data API v3 & Google OAuth
 import { VideoMetadata } from '../types';
 
@@ -45,61 +46,77 @@ export const getChannelInfo = async (channelId: string, apiKey: string): Promise
   }
 };
 
-// 2. Xin quyền OAuth (Implicit Flow) - Chạy ở Client Side (Popup Mode)
-export const requestGoogleAuth = (clientId: string): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    if (!window.google) {
-      reject(new Error("Google Script chưa load. Hãy refresh trang."));
-      return;
-    }
-
-    const client = window.google.accounts.oauth2.initTokenClient({
-      client_id: clientId,
-      scope: 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly',
-      callback: (tokenResponse: any) => {
-        if (tokenResponse && tokenResponse.access_token) {
-          resolve(tokenResponse.access_token);
-        } else {
-          reject(new Error("Không lấy được Token."));
-        }
-      },
-      error_callback: (err: any) => {
-          reject(err);
-      }
-    });
-
-    client.requestAccessToken();
-  });
-};
-
-// 2.1 Tạo URL OAuth (Implicit Flow) - Chạy ở Client Side (Redirect Mode - Fallback)
-// Dùng khi Popup bị chặn bởi môi trường Cloud/Iframe
+// 2. Tạo URL OAuth (Code Flow - access_type=offline để lấy Refresh Token)
 export const getGoogleAuthUrl = (clientId: string, redirectUri: string, stateChannelId: string) => {
     const scope = 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly';
-    // Xây dựng URL chuẩn của Google OAuth 2.0
-    return `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=${encodeURIComponent(scope)}&state=${stateChannelId}&include_granted_scopes=true`;
+    // access_type=offline & prompt=consent là bắt buộc để lấy refresh_token
+    return `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=${stateChannelId}&access_type=offline&prompt=consent&include_granted_scopes=true`;
 };
 
-// 3. Upload Video (Dùng Access Token - Private)
+// 3. Đổi Code lấy AccessToken + RefreshToken
+export const exchangeCodeForToken = async (code: string, clientId: string, clientSecret: string, redirectUri: string) => {
+    const params = new URLSearchParams();
+    params.append('code', code);
+    params.append('client_id', clientId);
+    params.append('client_secret', clientSecret);
+    params.append('redirect_uri', redirectUri);
+    params.append('grant_type', 'authorization_code');
+
+    const response = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params
+    });
+
+    if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error_description || "Lỗi đổi Code lấy Token");
+    }
+
+    return await response.json(); // trả về { access_token, refresh_token, expires_in, ... }
+};
+
+// 4. Refresh Access Token (Khi token hết hạn)
+export const refreshAccessToken = async (refreshToken: string, clientId: string, clientSecret: string) => {
+    const params = new URLSearchParams();
+    params.append('refresh_token', refreshToken);
+    params.append('client_id', clientId);
+    params.append('client_secret', clientSecret);
+    params.append('grant_type', 'refresh_token');
+
+    const response = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params
+    });
+
+    if (!response.ok) {
+        throw new Error("Không thể refresh token (Có thể quyền đã bị thu hồi).");
+    }
+
+    return await response.json(); // trả về { access_token, expires_in, ... }
+};
+
+
+// 5. Upload Video (Dùng Access Token)
 export const uploadVideoToYouTube = async (
   accessToken: string,
-  file: File, // Bắt buộc phải có File object thật từ <input type="file">
+  file: File, 
   metadata: VideoMetadata
 ) => {
-  // Upload Resumable Protocol của Google
   const metadataContent = {
     snippet: {
       title: metadata.title,
       description: metadata.description,
       tags: metadata.tags,
-      categoryId: "22", // People & Blogs default
+      categoryId: "22",
     },
     status: {
-      privacyStatus: metadata.visibility // public, private, unlisted
+      privacyStatus: metadata.visibility 
     }
   };
 
-  // Step 1: Init Upload để lấy Upload URL
+  // Step 1: Init Upload
   const initResponse = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status', {
     method: 'POST',
     headers: {
@@ -113,13 +130,17 @@ export const uploadVideoToYouTube = async (
 
   if (!initResponse.ok) {
     const err = await initResponse.json();
+    // Phát hiện lỗi Quota
+    if (initResponse.status === 403 && err.error?.message?.includes('quota')) {
+        throw new Error("QUOTA_EXCEEDED");
+    }
     throw new Error(`Lỗi khởi tạo upload: ${err.error?.message || initResponse.statusText}`);
   }
 
   const uploadUrl = initResponse.headers.get('location');
   if (!uploadUrl) throw new Error("Không lấy được Upload URL từ YouTube.");
 
-  // Step 2: Upload Binary File
+  // Step 2: Upload Binary
   const uploadResponse = await fetch(uploadUrl, {
     method: 'PUT',
     headers: {
@@ -129,8 +150,10 @@ export const uploadVideoToYouTube = async (
   });
 
   if (!uploadResponse.ok) {
-     throw new Error("Lỗi trong quá trình đẩy file lên YouTube.");
+     const err = await uploadResponse.json();
+     if (uploadResponse.status === 403) throw new Error("QUOTA_EXCEEDED");
+     throw new Error(`Lỗi đẩy file: ${err.error?.message || uploadResponse.statusText}`);
   }
 
-  return await uploadResponse.json(); // Trả về thông tin video đã upload
+  return await uploadResponse.json(); 
 };
