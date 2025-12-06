@@ -7,11 +7,10 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     define: {
-      // Định nghĩa process.env thành một object chứa API_KEY
-      // Điều này giúp code 'process.env.API_KEY' hoạt động và không gây lỗi runtime
-      'process.env': {
-        API_KEY: env.API_KEY || ''
-      }
+      // Stringify API Key để thay thế trực tiếp trong code
+      'process.env.API_KEY': JSON.stringify(env.API_KEY),
+      // Định nghĩa process.env rỗng để tránh lỗi "process is not defined" nếu có thư viện bên thứ 3 truy cập
+      'process.env': {}
     }
   };
 });
