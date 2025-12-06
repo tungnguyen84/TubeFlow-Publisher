@@ -1,0 +1,5 @@
+{
+  "name": "TubeFlow Publisher",
+  "description": "A professional YouTube automation scheduler and manager. Features multi-channel management, AI-powered metadata generation, and Supabase integration.",
+  "requestFramePermissions": []
+}
