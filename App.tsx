@@ -1,5 +1,6 @@
+
 import React, { useState } from 'react';
-import { LayoutDashboard, Radio, Clapperboard, CalendarClock, Settings as SettingsIcon, LogOut, UploadCloud } from 'lucide-react';
+import { LayoutDashboard, Radio, Clapperboard, CalendarClock, Settings as SettingsIcon, LogOut, UploadCloud, Network, TrendingUp, AlertTriangle } from 'lucide-react';
 import { View } from './types';
 
 // Components
@@ -9,6 +10,9 @@ import VideoLibrary from './components/VideoLibrary';
 import Scheduler from './components/Scheduler';
 import UploadQueue from './components/UploadQueue';
 import Settings from './components/Settings';
+import ProxyManager from './components/ProxyManager';
+import Analytics from './components/Analytics';
+import SystemLogs from './components/SystemLogs';
 
 const SidebarItem = ({ 
   icon: Icon, 
@@ -49,6 +53,12 @@ const App: React.FC = () => {
         return <Scheduler />;
       case View.QUEUE:
         return <UploadQueue />;
+      case View.PROXIES:
+        return <ProxyManager />;
+      case View.ANALYTICS:
+        return <Analytics />;
+      case View.SYSTEM_LOGS:
+        return <SystemLogs />;
       case View.SETTINGS:
         return <Settings />;
       default:
@@ -67,12 +77,18 @@ const App: React.FC = () => {
           <h1 className="text-xl font-bold tracking-tight text-white">TubeFlow</h1>
         </div>
 
-        <nav className="flex-1 px-3 space-y-1">
+        <nav className="flex-1 px-3 space-y-1 overflow-y-auto">
           <SidebarItem 
             icon={LayoutDashboard} 
             label="Dashboard" 
             active={currentView === View.DASHBOARD}
             onClick={() => setCurrentView(View.DASHBOARD)}
+          />
+          <SidebarItem 
+            icon={TrendingUp} 
+            label="Analytics & A/B" 
+            active={currentView === View.ANALYTICS}
+            onClick={() => setCurrentView(View.ANALYTICS)}
           />
           <SidebarItem 
             icon={Radio} 
@@ -98,9 +114,21 @@ const App: React.FC = () => {
             active={currentView === View.QUEUE}
             onClick={() => setCurrentView(View.QUEUE)}
           />
+          <SidebarItem 
+            icon={AlertTriangle} 
+            label="System Health" 
+            active={currentView === View.SYSTEM_LOGS}
+            onClick={() => setCurrentView(View.SYSTEM_LOGS)}
+          />
         </nav>
 
         <div className="p-3 border-t border-gray-800">
+           <SidebarItem 
+            icon={Network} 
+            label="Proxy Manager" 
+            active={currentView === View.PROXIES}
+            onClick={() => setCurrentView(View.PROXIES)}
+          />
           <SidebarItem 
             icon={SettingsIcon} 
             label="Settings & Database" 

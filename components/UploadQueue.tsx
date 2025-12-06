@@ -1,38 +1,50 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Job } from '../types';
-import { Play, Pause, XCircle, RotateCw, CheckCircle2, Clock, UploadCloud, RefreshCw, Upload, AlertTriangle, ShieldAlert } from 'lucide-react';
-import { fetchJobs, deleteJob, updateJobStatus, updateChannelAccessTokenOnly, fetchSystemSettings } from '../services/supabaseService';
+import { Job, Channel } from '../types';
+import { Play, Pause, XCircle, RotateCw, CheckCircle2, Clock, UploadCloud, RefreshCw, Upload, AlertTriangle, ShieldAlert, Filter } from 'lucide-react';
+import { fetchJobs, deleteJob, updateJobStatus, updateChannelAccessTokenOnly, fetchSystemSettings, fetchChannels, updateVideoYoutubeId } from '../services/supabaseService';
 import { uploadVideoToYouTube, refreshAccessToken } from '../services/youtubeService';
 
 const UploadQueue: React.FC = () => {
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [channels, setChannels] = useState<Channel[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [uploadingJobId, setUploadingJobId] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
 
+  // Filters
+  const [filterDays, setFilterDays] = useState(3);
+  const [filterChannelId, setFilterChannelId] = useState<string>('');
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const selectedJobRef = useRef<Job | null>(null);
 
-  const loadJobs = async () => {
+  const loadData = async () => {
     setIsLoading(true);
-    const data = await fetchJobs();
-    setJobs(data);
+    // Fetch channels for filter
+    const ch = await fetchChannels();
+    setChannels(ch);
+    
+    // Fetch jobs with filters
+    const jobData = await fetchJobs(filterDays, filterChannelId || null);
+    setJobs(jobData);
     setIsLoading(false);
   };
 
   useEffect(() => {
-    loadJobs();
+    loadData();
     const interval = setInterval(() => {
-        if (!uploadingJobId) loadJobs();
+        if (!uploadingJobId) {
+            fetchJobs(filterDays, filterChannelId || null).then(setJobs);
+        }
     }, 15000);
     return () => clearInterval(interval);
-  }, [uploadingJobId]);
+  }, [uploadingJobId, filterDays, filterChannelId]);
 
   const handleDelete = async (id: string) => {
     if (confirm('Xóa job này?')) {
         await deleteJob(id);
-        loadJobs();
+        loadData();
     }
   };
 
@@ -78,9 +90,6 @@ const UploadQueue: React.FC = () => {
               if (!clientId || !clientSecret) {
                   const sys = await fetchSystemSettings();
                   if (!clientId) clientId = sys.googleClientId;
-                  // Secret không thể lấy từ System ở client-side nếu không lưu (lỗ hổng bảo mật nếu lưu public).
-                  // Giả sử user đã nhập trong Channel Config hoặc ta chấp nhận rủi ro lưu secret trong Settings DB.
-                  // Ở đây giả định user đã cấu hình đúng ở Channel level.
               }
 
               if (!clientId || !clientSecret) {
@@ -110,11 +119,15 @@ const UploadQueue: React.FC = () => {
           // STEP 3: UPLOAD
           const result = await uploadVideoToYouTube(activeToken!, file, finalMetadata);
           
+          // STEP 4: UPDATE DB (Status & YouTube ID)
+          // result.id is the YouTube Video ID
+          await updateVideoYoutubeId(job.videoId, result.id);
+          
           setUploadProgress(100);
           await updateJobStatus(job.id, 'COMPLETED');
           setJobs(prev => prev.map(j => j.id === job.id ? { ...j, status: 'COMPLETED', progress: 100 } : j));
           
-          alert(`Đã upload: ${finalMetadata.title}`);
+          alert(`Đã upload: ${finalMetadata.title} (ID: ${result.id})`);
 
       } catch (error: any) {
           console.error("Upload Error:", error);
@@ -135,7 +148,7 @@ const UploadQueue: React.FC = () => {
           setUploadingJobId(null);
           setUploadProgress(0);
           selectedJobRef.current = null;
-          loadJobs();
+          loadData();
       }
   };
 
@@ -152,7 +165,7 @@ const UploadQueue: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
            <h2 className="text-2xl font-bold text-white flex items-center gap-2">
              <UploadCloud className="w-7 h-7" />
@@ -161,77 +174,104 @@ const UploadQueue: React.FC = () => {
            <p className="text-gray-400 text-sm mt-1">Upload với Auto-Refresh Token & Fallback Metadata</p>
         </div>
         
-        <div className="flex gap-2">
-          <button onClick={loadJobs} className="p-2 bg-gray-800 rounded text-gray-400 hover:text-white">
-            <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin' : ''}`} />
-          </button>
+        <div className="flex items-center gap-3 bg-gray-800 p-2 rounded-lg border border-gray-700">
+           <Filter className="w-4 h-4 text-gray-500" />
+           <select 
+             value={filterDays} 
+             onChange={e => setFilterDays(Number(e.target.value))}
+             className="bg-gray-900 text-white text-sm border-gray-600 rounded p-1 outline-none"
+           >
+              <option value={1}>1 ngày gần đây</option>
+              <option value={3}>3 ngày gần đây</option>
+              <option value={7}>7 ngày gần đây</option>
+              <option value={30}>30 ngày gần đây</option>
+           </select>
+
+           <select 
+             value={filterChannelId} 
+             onChange={e => setFilterChannelId(e.target.value)}
+             className="bg-gray-900 text-white text-sm border-gray-600 rounded p-1 outline-none max-w-[150px]"
+           >
+              <option value="">Tất cả kênh</option>
+              {channels.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+           </select>
+
+           <button onClick={loadData} className="p-1.5 bg-gray-700 rounded hover:bg-gray-600 text-white">
+             <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+           </button>
         </div>
       </div>
 
       <input type="file" ref={fileInputRef} accept="video/*" className="hidden" onChange={handleFileSelected} />
 
       <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
-        <div className="divide-y divide-gray-700">
-           {jobs.map(job => (
-             <div key={job.id} className="p-5 hover:bg-gray-750 transition flex items-center gap-4">
-                <div className="shrink-0">
-                  {job.status === 'UPLOADING' && <RotateCw className="w-6 h-6 text-blue-500 animate-spin" />}
-                  {job.status === 'QUEUED' && <Clock className="w-6 h-6 text-yellow-500" />}
-                  {job.status === 'COMPLETED' && <CheckCircle2 className="w-6 h-6 text-green-500" />}
-                  {job.status === 'QUOTA_LIMIT' && <ShieldAlert className="w-6 h-6 text-orange-500" />}
-                  {job.status === 'FAILED' && <XCircle className="w-6 h-6 text-red-500" />}
-                </div>
-
-                <div className="flex-1 min-w-0">
-                  <div className="flex justify-between items-start mb-1">
-                    <h3 className="text-white font-medium truncate" title={job.videoTitle}>{job.videoTitle}</h3>
-                    <span className={`text-xs px-2 py-0.5 rounded border ${getStatusColor(job.status)}`}>
-                      {job.status}
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-gray-400 mb-2">
-                      <span className="text-gray-300 bg-gray-700 px-1.5 rounded">{job.channelName}</span>
-                      <span>• Lịch: {job.scheduledTime}</span>
-                      {job.clientId && <span className="text-blue-400 border border-blue-900 px-1 rounded">Custom App</span>}
-                  </div>
-                  
-                  {/* Progress Info */}
-                  {(job.status === 'UPLOADING' || uploadingJobId === job.id) && (
-                    <div className="w-full h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                      <div className="h-full bg-blue-500 transition-all duration-300" style={{ width: uploadingJobId === job.id ? `${uploadProgress}%` : '0%' }}></div>
+        {jobs.length === 0 ? (
+            <div className="p-8 text-center text-gray-500">Không có job nào trong {filterDays} ngày gần đây.</div>
+        ) : (
+            <div className="divide-y divide-gray-700">
+            {jobs.map(job => (
+                <div key={job.id} className="p-5 hover:bg-gray-750 transition flex items-center gap-4">
+                    <div className="shrink-0">
+                    {job.status === 'UPLOADING' && <RotateCw className="w-6 h-6 text-blue-500 animate-spin" />}
+                    {job.status === 'QUEUED' && <Clock className="w-6 h-6 text-yellow-500" />}
+                    {job.status === 'COMPLETED' && <CheckCircle2 className="w-6 h-6 text-green-500" />}
+                    {job.status === 'QUOTA_LIMIT' && <ShieldAlert className="w-6 h-6 text-orange-500" />}
+                    {job.status === 'FAILED' && <XCircle className="w-6 h-6 text-red-500" />}
                     </div>
-                  )}
 
-                  {/* Metadata Check */}
-                  {!job.videoMetadata?.title && job.status === 'QUEUED' && (
-                       <p className="text-[10px] text-gray-500 italic mt-1">
-                           * Video thiếu metadata. Sẽ dùng mặc định của kênh khi upload.
-                           Title: {job.channelDefaultMetadata?.title || 'None'}
-                       </p>
-                  )}
+                    <div className="flex-1 min-w-0">
+                    <div className="flex justify-between items-start mb-1">
+                        <h3 className="text-white font-medium truncate" title={job.videoTitle}>{job.videoTitle}</h3>
+                        <span className={`text-xs px-2 py-0.5 rounded border ${getStatusColor(job.status)}`}>
+                        {job.status}
+                        </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-gray-400 mb-2">
+                        <span className="text-gray-300 bg-gray-700 px-1.5 rounded">{job.channelName}</span>
+                        <span>• Lịch: {job.scheduledTime}</span>
+                        {job.clientId && <span className="text-blue-400 border border-blue-900 px-1 rounded">Custom App</span>}
+                    </div>
+                    
+                    {/* Progress Info */}
+                    {(job.status === 'UPLOADING' || uploadingJobId === job.id) && (
+                        <div className="w-full h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                        <div className="h-full bg-blue-500 transition-all duration-300" style={{ width: uploadingJobId === job.id ? `${uploadProgress}%` : '0%' }}></div>
+                        </div>
+                    )}
 
-                  {job.errorMessage && <p className="text-xs text-red-400 mt-1">Lỗi: {job.errorMessage}</p>}
+                    {/* Metadata Check */}
+                    {!job.videoMetadata?.title && job.status === 'QUEUED' && (
+                        <p className="text-[10px] text-gray-500 italic mt-1">
+                            * Video thiếu metadata. Sẽ dùng mặc định của kênh khi upload.
+                            Title: {job.channelDefaultMetadata?.title || 'None'}
+                        </p>
+                    )}
+
+                    {job.errorMessage && <p className="text-xs text-red-400 mt-1">Lỗi: {job.errorMessage}</p>}
+                    </div>
+
+                    <div className="shrink-0 flex gap-2">
+                    {job.status !== 'COMPLETED' && job.status !== 'UPLOADING' && (
+                        <button 
+                            onClick={() => handleStartUpload(job)}
+                            disabled={uploadingJobId !== null}
+                            className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 text-white text-xs font-medium rounded transition"
+                        >
+                            <Upload className="w-3 h-3" />
+                            {(job.status === 'FAILED' || job.status === 'QUOTA_LIMIT') ? 'Thử lại' : 'Upload'}
+                        </button>
+                    )}
+                    
+                    <button onClick={() => handleDelete(job.id)} className="p-2 hover:bg-red-900/50 rounded text-gray-400 hover:text-red-400">
+                        <XCircle className="w-4 h-4" />
+                    </button>
+                    </div>
                 </div>
-
-                <div className="shrink-0 flex gap-2">
-                   {job.status !== 'COMPLETED' && job.status !== 'UPLOADING' && (
-                       <button 
-                         onClick={() => handleStartUpload(job)}
-                         disabled={uploadingJobId !== null}
-                         className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 text-white text-xs font-medium rounded transition"
-                       >
-                           <Upload className="w-3 h-3" />
-                           {(job.status === 'FAILED' || job.status === 'QUOTA_LIMIT') ? 'Thử lại' : 'Upload'}
-                       </button>
-                   )}
-                   
-                   <button onClick={() => handleDelete(job.id)} className="p-2 hover:bg-red-900/50 rounded text-gray-400 hover:text-red-400">
-                     <XCircle className="w-4 h-4" />
-                   </button>
-                </div>
-             </div>
-           ))}
-        </div>
+            ))}
+            </div>
+        )}
       </div>
     </div>
   );

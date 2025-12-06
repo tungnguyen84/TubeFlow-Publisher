@@ -14,6 +14,18 @@ export enum VideoStatus {
   FAILED = 'FAILED'
 }
 
+export interface ProxyItem {
+  id: string;
+  ip: string;
+  port: number;
+  username?: string;
+  password?: string;
+  protocol: 'http' | 'https' | 'socks4' | 'socks5';
+  status: 'ACTIVE' | 'DEAD' | 'UNKNOWN';
+  lastChecked?: string;
+  location?: string; // VD: US, VN
+}
+
 export interface Channel {
   id: string;
   name: string;
@@ -27,17 +39,25 @@ export interface Channel {
   
   // Auth Data
   accessToken?: string; 
-  refreshToken?: string; // MỚI: Dùng để lấy token mới khi hết hạn
+  refreshToken?: string; 
   tokenExpiresAt?: number; 
   
   // Config riêng cho từng kênh (Optional overrides)
-  clientId?: string;      // MỚI
-  clientSecret?: string;  // MỚI
+  clientId?: string;      
+  clientSecret?: string;  
   
-  // Default Metadata
-  defaultTitle?: string;       // MỚI
-  defaultDescription?: string; // MỚI
-  defaultTags?: string[];      // MỚI
+  // Default Metadata & Settings
+  defaultTitle?: string;       
+  defaultDescription?: string; 
+  defaultTags?: string[];      
+  defaultFolderPath?: string; 
+  
+  // Schedule Binding
+  currentTemplateId?: string; // ID của lịch mẫu đang áp dụng cho kênh này
+  
+  // Proxy Binding
+  proxyId?: string;
+  proxyIP?: string; // Để hiển thị nhanh
 }
 
 export interface ChannelGroup {
@@ -65,6 +85,11 @@ export interface VideoItem {
   filePath: string; 
   scheduledTime?: string;
   targetChannelIds: string[];
+  
+  // Binding Channel
+  channelId?: string; // Video này thuộc về kênh nào
+  channelName?: string; // Tên kênh sở hữu
+  youtubeVideoId?: string; // ID trên YouTube sau khi upload
 }
 
 export interface Job {
@@ -73,7 +98,7 @@ export interface Job {
   channelId: string;
   videoTitle: string; 
   channelName: string; 
-  status: 'QUEUED' | 'UPLOADING' | 'COMPLETED' | 'FAILED' | 'RETRYING' | 'PAUSED' | 'QUOTA_LIMIT'; // MỚI: QUOTA_LIMIT
+  status: 'QUEUED' | 'UPLOADING' | 'COMPLETED' | 'FAILED' | 'RETRYING' | 'PAUSED' | 'QUOTA_LIMIT';
   progress: number;
   scheduledTime: string;
   errorMessage?: string;
@@ -111,5 +136,53 @@ export enum View {
   VIDEOS = 'VIDEOS',
   SCHEDULER = 'SCHEDULER',
   QUEUE = 'QUEUE',
-  SETTINGS = 'SETTINGS'
+  SETTINGS = 'SETTINGS',
+  PROXIES = 'PROXIES',
+  ANALYTICS = 'ANALYTICS',
+  SYSTEM_LOGS = 'SYSTEM_LOGS'
+}
+
+// --- NEW TYPES FOR AUTO SCHEDULER ---
+export interface TimeSlot {
+    time: string; // "09:00"
+    count: number; // Số lượng video đăng trong slot này
+}
+
+export interface ScheduleTemplate {
+    id: string;
+    name: string;
+    cycleDays: number; // 1 = Hàng ngày, 2 = Cách 1 ngày (2 ngày/lần)...
+    timeSlots: TimeSlot[];
+    createdAt?: string;
+}
+
+export interface DashboardStats {
+    totalChannels: number;
+    totalUploadsToday: number;
+    queuedJobs: number;
+    failedJobs: number;
+    recentActivity: {date: string, count: number}[];
+}
+
+// --- ANALYTICS TYPES ---
+export interface VideoAnalytics {
+    id: string; // YouTube Video ID
+    title: string;
+    channelName: string;
+    publishedAt: string;
+    thumbnailUrl: string;
+    stats: {
+        viewCount: number;
+        likeCount: number;
+        commentCount: number;
+    };
+    performance?: 'HIGH' | 'AVG' | 'LOW'; // So với trung bình kênh
+}
+
+export interface ChannelAnalytics {
+    channelId: string;
+    channelName: string;
+    subscriberCount: number;
+    totalViews: number;
+    videoCount: number;
 }

@@ -16,6 +16,16 @@ export interface YouTubeChannelInfo {
   subscriberCount: number;
 }
 
+export interface YouTubeVideoStats {
+    id: string;
+    title: string;
+    publishedAt: string;
+    thumbnailUrl: string;
+    viewCount: number;
+    likeCount: number;
+    commentCount: number;
+}
+
 // 1. Lấy thông tin kênh (Dùng API Key - Public)
 export const getChannelInfo = async (channelId: string, apiKey: string): Promise<YouTubeChannelInfo | null> => {
   if (!apiKey) throw new Error("Vui lòng nhập YouTube API Key trong Settings trước.");
@@ -157,3 +167,52 @@ export const uploadVideoToYouTube = async (
 
   return await uploadResponse.json(); 
 };
+
+// 6. Lấy thống kê video (Views, Likes, Comments) - Analytics
+export const getVideoStatistics = async (videoIds: string[], accessToken: string): Promise<YouTubeVideoStats[]> => {
+    if (videoIds.length === 0) return [];
+
+    // YouTube API giới hạn 50 ID mỗi request
+    const chunks = [];
+    for (let i = 0; i < videoIds.length; i += 50) {
+        chunks.push(videoIds.slice(i, i + 50));
+    }
+
+    let allStats: YouTubeVideoStats[] = [];
+
+    for (const chunk of chunks) {
+        const ids = chunk.join(',');
+        const url = `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id=${ids}`;
+        
+        try {
+            const response = await fetch(url, {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`
+                }
+            });
+            
+            if (!response.ok) {
+                 console.error("Lỗi lấy stats video:", await response.text());
+                 continue; 
+            }
+
+            const data = await response.json();
+            if (data.items) {
+                const mapped = data.items.map((item: any) => ({
+                    id: item.id,
+                    title: item.snippet.title,
+                    publishedAt: item.snippet.publishedAt,
+                    thumbnailUrl: item.snippet.thumbnails.default?.url,
+                    viewCount: parseInt(item.statistics.viewCount || '0'),
+                    likeCount: parseInt(item.statistics.likeCount || '0'),
+                    commentCount: parseInt(item.statistics.commentCount || '0')
+                }));
+                allStats = [...allStats, ...mapped];
+            }
+        } catch (e) {
+            console.error("Fetch stats error:", e);
+        }
+    }
+    
+    return allStats;
+}

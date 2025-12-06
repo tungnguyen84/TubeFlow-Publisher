@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 
 export interface AIMetadataResult {
@@ -5,6 +6,45 @@ export interface AIMetadataResult {
   description: string;
   tags: string[];
   hashtags: string[];
+}
+
+// Hàm gợi ý giờ đăng
+export const getBestUploadTimes = async (country: string, niche: string): Promise<{timeSlots: string[]} | null> => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const prompt = `
+      Act as a YouTube Analytics Expert.
+      Target Audience Country: ${country}
+      Channel Niche: ${niche}
+      
+      Based on global viewing habits and YouTube trends for this demographic and location:
+      Identify the 3 BEST distinct time slots (in 24h format HH:MM) to upload Shorts/Videos for maximum reach.
+      Return strictly a JSON list.
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        timeSlots: {
+                            type: Type.ARRAY,
+                            items: { type: Type.STRING },
+                            description: "List of 3 best times, e.g. ['09:00', '14:00', '20:00']"
+                        }
+                    }
+                }
+            }
+        });
+        if (response.text) return JSON.parse(response.text);
+        return null;
+    } catch (e) {
+        console.error("AI Suggest Error:", e);
+        return null;
+    }
 }
 
 export const generateVideoMetadata = async (

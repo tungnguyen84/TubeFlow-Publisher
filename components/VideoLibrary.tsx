@@ -1,27 +1,42 @@
+
 import React, { useState, useEffect, useRef } from 'react';
-import { VideoItem, VideoStatus, VideoMetadata } from '../types';
-import { FileVideo, Sparkles, Calendar, MoreVertical, Edit3, X, Save, Upload, RefreshCw } from 'lucide-react';
+import { VideoItem, VideoStatus, VideoMetadata, Channel } from '../types';
+import { FileVideo, Sparkles, Calendar, MoreVertical, Edit3, X, Save, Upload, RefreshCw, Link as LinkIcon, Filter, Search } from 'lucide-react';
 import { generateVideoMetadata } from '../services/geminiService';
-import { fetchVideos, saveVideo, updateVideoMetadata } from '../services/supabaseService';
+import { fetchVideos, saveVideo, updateVideoMetadata, fetchChannels } from '../services/supabaseService';
 
 const VideoLibrary: React.FC = () => {
   const [videos, setVideos] = useState<VideoItem[]>([]);
+  const [channels, setChannels] = useState<Channel[]>([]);
   const [isGenerating, setIsGenerating] = useState<string | null>(null);
   const [editingVideo, setEditingVideo] = useState<VideoItem | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Filters
+  const [filterChannelId, setFilterChannelId] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
+  const [filterFolder, setFilterFolder] = useState('');
+  const [limit, setLimit] = useState<number>(10);
 
-  // Edit State
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [editForm, setEditForm] = useState<VideoMetadata>({
     title: '', description: '', tags: [], visibility: 'private'
   });
 
-  const loadVideos = async () => {
+  const loadData = async () => {
     setIsLoading(true);
     try {
-      const data = await fetchVideos();
-      setVideos(data);
+      const [v, c] = await Promise.all([
+          fetchVideos({ 
+            channelId: filterChannelId, 
+            status: filterStatus, 
+            folder: filterFolder,
+            limit: limit
+          }),
+          fetchChannels()
+      ]);
+      setVideos(v);
+      setChannels(c);
     } catch (e) {
       console.error(e);
     } finally {
@@ -30,8 +45,8 @@ const VideoLibrary: React.FC = () => {
   };
 
   useEffect(() => {
-    loadVideos();
-  }, []);
+    loadData();
+  }, [filterChannelId, filterStatus, limit]); // Reload when select filters change. Folder search manual trigger
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
@@ -40,13 +55,12 @@ const VideoLibrary: React.FC = () => {
     const files = Array.from(e.target.files) as File[];
     
     for (const file of files) {
-      // Đọc thông tin file thật
       const videoEntry: Partial<VideoItem> = {
         filename: file.name,
-        filePath: `C:\\Videos\\${file.name}`, // Giả lập đường dẫn local vì trình duyệt không cho phép lấy full path
+        filePath: `C:\\Videos\\${file.name}`, 
         resolution: '1080p',
         metadata: {
-          title: file.name.replace(/\.[^/.]+$/, ""), // Bỏ đuôi file
+          title: file.name.replace(/\.[^/.]+$/, ""),
           description: '',
           tags: [],
           visibility: 'private'
@@ -55,7 +69,7 @@ const VideoLibrary: React.FC = () => {
       await saveVideo(videoEntry);
     }
     
-    await loadVideos();
+    await loadData();
     setIsLoading(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -69,7 +83,7 @@ const VideoLibrary: React.FC = () => {
     if (!editingVideo) return;
     await updateVideoMetadata(editingVideo.id, editForm);
     setEditingVideo(null);
-    loadVideos();
+    loadData();
   };
 
   const handleGenerateAI = async (video: VideoItem) => {
@@ -77,7 +91,6 @@ const VideoLibrary: React.FC = () => {
     try {
       const result = await generateVideoMetadata(video.filename, "General"); 
       if (result) {
-        // Lưu thẳng vào DB
         const newMeta = {
             title: result.titles[0],
             description: result.description,
@@ -85,11 +98,11 @@ const VideoLibrary: React.FC = () => {
             visibility: 'private'
         };
         await updateVideoMetadata(video.id, newMeta);
-        loadVideos();
+        loadData();
       }
     } catch (e) {
       console.error(e);
-      alert("Lỗi khi gọi Gemini API. Kiểm tra console và biến môi trường.");
+      alert("Lỗi khi gọi Gemini API.");
     } finally {
       setIsGenerating(null);
     }
@@ -97,42 +110,91 @@ const VideoLibrary: React.FC = () => {
 
   return (
     <div className="space-y-6 relative">
-      <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold text-white">Thư viện Video</h2>
-        <div className="flex gap-3">
-          <input 
-            type="file" 
-            multiple 
-            accept="video/*" 
-            className="hidden" 
-            ref={fileInputRef}
-            onChange={handleFileSelect}
-          />
-          <button onClick={loadVideos} className="p-2 text-gray-400 hover:text-white bg-gray-800 rounded-lg">
-             <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin' : ''}`} />
-          </button>
-          <button 
-            onClick={() => fileInputRef.current?.click()}
-            className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm transition flex items-center gap-2"
-          >
-            <Upload className="w-4 h-4" />
-            Nhập Video từ Folder
-          </button>
+      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+        <div>
+           <h2 className="text-2xl font-bold text-white">Thư viện Video</h2>
+           <p className="text-gray-400 text-sm mt-1">{videos.length} videos được tìm thấy</p>
+        </div>
+        
+        <div className="flex flex-wrap items-center gap-2">
+            {/* Filters */}
+            <div className="flex items-center bg-gray-800 rounded-lg p-1 border border-gray-700">
+                <Search className="w-4 h-4 text-gray-500 ml-2" />
+                <input 
+                  value={filterFolder}
+                  onChange={e => setFilterFolder(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && loadData()}
+                  placeholder="Tìm theo thư mục..."
+                  className="bg-transparent text-sm text-white p-2 outline-none w-40"
+                />
+            </div>
+
+            <select 
+              value={limit}
+              onChange={e => setLimit(Number(e.target.value))}
+              className="bg-gray-800 text-white text-sm border border-gray-700 rounded-lg p-2 outline-none"
+            >
+                <option value={10}>10 dòng</option>
+                <option value={50}>50 dòng</option>
+                <option value={100}>100 dòng</option>
+                <option value={500}>500 dòng</option>
+                <option value={1000}>1000 dòng</option>
+                <option value={-1}>Tất cả</option>
+            </select>
+
+            <select 
+              value={filterChannelId}
+              onChange={e => setFilterChannelId(e.target.value)}
+              className="bg-gray-800 text-white text-sm border border-gray-700 rounded-lg p-2 outline-none"
+            >
+                <option value="">Tất cả kênh</option>
+                {channels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+
+            <select 
+              value={filterStatus}
+              onChange={e => setFilterStatus(e.target.value)}
+              className="bg-gray-800 text-white text-sm border border-gray-700 rounded-lg p-2 outline-none"
+            >
+                <option value="">Tất cả trạng thái</option>
+                <option value="DRAFT">Draft</option>
+                <option value="SCHEDULED">Scheduled</option>
+                <option value="PUBLISHED">Published</option>
+            </select>
+
+            <button onClick={loadData} className="p-2 text-gray-400 hover:text-white bg-gray-800 rounded-lg border border-gray-700">
+                <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin' : ''}`} />
+            </button>
+            <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm transition flex items-center gap-2"
+            >
+                <Upload className="w-4 h-4" />
+                Import
+            </button>
+            <input 
+                type="file" 
+                multiple 
+                accept="video/*" 
+                className="hidden" 
+                ref={fileInputRef}
+                onChange={handleFileSelect}
+            />
         </div>
       </div>
 
       <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
         {videos.length === 0 ? (
           <div className="p-8 text-center text-gray-500">
-             Danh sách trống. Hãy nhập video để bắt đầu.
+             Không tìm thấy video nào phù hợp với bộ lọc.
           </div>
         ) : (
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-gray-900/50 text-gray-400 text-sm border-b border-gray-700">
-                <th className="p-4 font-medium">Tên File</th>
+                <th className="p-4 font-medium">Tên File & Đường Dẫn</th>
+                <th className="p-4 font-medium">Kênh Sở Hữu</th>
                 <th className="p-4 font-medium">Metadata (Tiêu đề/Tag)</th>
-                <th className="p-4 font-medium">Thông số</th>
                 <th className="p-4 font-medium">Trạng thái</th>
                 <th className="p-4 font-medium text-right">Hành động</th>
               </tr>
@@ -150,6 +212,16 @@ const VideoLibrary: React.FC = () => {
                         <p className="text-xs text-gray-500 truncate max-w-[150px]">{video.filePath}</p>
                       </div>
                     </div>
+                  </td>
+                  <td className="p-4">
+                      {video.channelName ? (
+                          <span className="inline-flex items-center gap-1 bg-blue-900/30 text-blue-400 px-2 py-1 rounded border border-blue-900/50 text-xs font-medium">
+                              <LinkIcon className="w-3 h-3" />
+                              {video.channelName}
+                          </span>
+                      ) : (
+                          <span className="text-gray-600 text-xs italic">-- Tự do --</span>
+                      )}
                   </td>
                   <td className="p-4 max-w-xs">
                     {video.metadata.title ? (
@@ -178,10 +250,6 @@ const VideoLibrary: React.FC = () => {
                       </button>
                     )}
                   </td>
-                  <td className="p-4 text-gray-400">
-                    <p>{video.resolution}</p>
-                    <p className="text-xs">{video.duration}</p>
-                  </td>
                   <td className="p-4">
                     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
                       ${video.status === VideoStatus.PUBLISHED ? 'bg-green-100 text-green-800' : 
@@ -199,7 +267,6 @@ const VideoLibrary: React.FC = () => {
                         >
                           <Edit3 className="w-4 h-4"/>
                         </button>
-                        <button className="p-2 hover:bg-gray-700 rounded text-gray-400"><MoreVertical className="w-4 h-4"/></button>
                     </div>
                   </td>
                 </tr>
