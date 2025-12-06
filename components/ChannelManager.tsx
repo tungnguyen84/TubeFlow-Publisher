@@ -157,7 +157,12 @@ const ChannelManager: React.FC = () => {
       return;
     }
 
-    const currentUrl = window.location.origin + window.location.pathname;
+    // FIX: Xử lý URL chuẩn, bỏ dấu '/' ở cuối nếu có để khớp với Google Console
+    let currentUrl = window.location.origin + window.location.pathname;
+    if (currentUrl.endsWith('/')) {
+        currentUrl = currentUrl.slice(0, -1);
+    }
+
     const authUrl = getGoogleAuthUrl(clientId, currentUrl, channelId);
     window.location.href = authUrl;
   };

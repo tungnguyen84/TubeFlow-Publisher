@@ -49,9 +49,16 @@ const Settings: React.FC = () => {
     loadFromDB();
 
     // Check Origin & Iframe
-    setCurrentOrigin(window.location.origin);
-    // URL đầy đủ (bỏ hash/search)
-    setCurrentUrl(window.location.origin + window.location.pathname);
+    let origin = window.location.origin;
+    if (origin.endsWith('/')) origin = origin.slice(0, -1);
+    setCurrentOrigin(origin);
+
+    // URL đầy đủ (bỏ hash/search) & Bỏ trailing slash để khớp với OAuth
+    let url = window.location.origin + window.location.pathname;
+    if (url.endsWith('/')) {
+        url = url.slice(0, -1);
+    }
+    setCurrentUrl(url);
 
     try {
       if (window.self !== window.top) {
@@ -165,7 +172,7 @@ const Settings: React.FC = () => {
                         2. Authorized redirect URIs 
                         <span className="text-yellow-500 text-[10px] bg-yellow-900/30 px-1 rounded">(Dùng cho Redirect Mode)</span>
                     </p>
-                    <p className="text-[10px] text-gray-500">Nếu Popup bị lỗi "invalid_request", hãy dùng link này.</p>
+                    <p className="text-[10px] text-gray-500">Phải khớp chính xác từng ký tự (không có dấu / ở cuối).</p>
                     <div className="flex gap-2">
                         <code className="flex-1 bg-black/30 p-2 rounded text-xs text-purple-400 font-mono truncate border border-purple-900/50">
                         {currentUrl}
