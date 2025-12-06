@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AppSettings } from '../types';
-import { Save, Database, Key, Server, CheckCircle, Youtube, Lock, Copy, Globe, AlertTriangle, ExternalLink, ArrowRight } from 'lucide-react';
-import { generateSchemaSQL } from '../services/supabaseService';
+import { Save, Database, Key, Server, CheckCircle, Youtube, Lock, Copy, Globe, AlertTriangle, ExternalLink, ArrowRight, RefreshCw } from 'lucide-react';
+import { generateSchemaSQL, fetchSystemSettings, saveSystemSettings } from '../services/supabaseService';
 
 const Settings: React.FC = () => {
   const [settings, setSettings] = useState<AppSettings>({
@@ -16,16 +16,38 @@ const Settings: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'general' | 'database'>('general');
   const [isSaved, setIsSaved] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [currentOrigin, setCurrentOrigin] = useState('');
   const [currentUrl, setCurrentUrl] = useState('');
   const [isIframe, setIsIframe] = useState(false);
 
   useEffect(() => {
-    const saved = localStorage.getItem('tubeflow_settings');
-    if (saved) {
-      setSettings(JSON.parse(saved));
+    // 1. Load LocalStorage first (for non-sensitive configs like upload delay)
+    const savedLocal = localStorage.getItem('tubeflow_settings');
+    if (savedLocal) {
+      setSettings(prev => ({ ...prev, ...JSON.parse(savedLocal) }));
     }
     
+    // 2. Load API Keys from Database
+    const loadFromDB = async () => {
+      setIsLoading(true);
+      try {
+        const dbSettings = await fetchSystemSettings();
+        if (dbSettings.youtubeApiKey || dbSettings.googleClientId) {
+          setSettings(prev => ({
+            ...prev,
+            youtubeApiKey: dbSettings.youtubeApiKey,
+            googleClientId: dbSettings.googleClientId
+          }));
+        }
+      } catch (e) {
+        console.error("Lỗi load settings từ DB:", e);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadFromDB();
+
     // Check Origin & Iframe
     setCurrentOrigin(window.location.origin);
     // URL đầy đủ (bỏ hash/search)
@@ -44,10 +66,23 @@ const Settings: React.FC = () => {
     setSettings(prev => ({ ...prev, [field]: value }));
   };
 
-  const handleSave = () => {
-    localStorage.setItem('tubeflow_settings', JSON.stringify(settings));
-    setIsSaved(true);
-    setTimeout(() => setIsSaved(false), 2000);
+  const handleSave = async () => {
+    setIsLoading(true);
+    try {
+      // 1. Save keys to DB
+      await saveSystemSettings(settings.youtubeApiKey, settings.googleClientId);
+      
+      // 2. Save full config to LocalStorage (as cache)
+      localStorage.setItem('tubeflow_settings', JSON.stringify(settings));
+      
+      setIsSaved(true);
+      setTimeout(() => setIsSaved(false), 2000);
+      alert("Đã lưu cấu hình vào Database và LocalStorage!");
+    } catch (e: any) {
+      alert("Lỗi khi lưu vào Database: " + e.message + "\n(Hãy chắc chắn bạn đã tạo bảng global_settings trong Database)");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const sqlCode = generateSchemaSQL();
@@ -59,7 +94,10 @@ const Settings: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-white">Cấu hình Hệ thống</h2>
+      <div className="flex justify-between items-center">
+         <h2 className="text-2xl font-bold text-white">Cấu hình Hệ thống</h2>
+         {isLoading && <div className="text-blue-400 flex items-center gap-2"><RefreshCw className="w-4 h-4 animate-spin"/> Đang đồng bộ DB...</div>}
+      </div>
 
       {/* Warning nếu chạy trong iframe */}
       {isIframe && (
@@ -154,7 +192,7 @@ const Settings: React.FC = () => {
                 value={settings.youtubeApiKey}
                 onChange={(e) => handleChange('youtubeApiKey', e.target.value)}
                 className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none"
-                placeholder="AIzaSy... (Dùng để đọc info kênh)"
+                placeholder="AIzaSy... (Lưu vào DB)"
               />
             </div>
 
@@ -168,7 +206,7 @@ const Settings: React.FC = () => {
                 value={settings.googleClientId}
                 onChange={(e) => handleChange('googleClientId', e.target.value)}
                 className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none"
-                placeholder="xxx.apps.googleusercontent.com"
+                placeholder="xxx.apps.googleusercontent.com (Lưu vào DB)"
               />
             </div>
           </div>
@@ -202,10 +240,11 @@ const Settings: React.FC = () => {
           <div className="lg:col-span-2 flex justify-end">
             <button 
               onClick={handleSave}
-              className={`flex items-center gap-2 px-6 py-2.5 rounded-lg font-medium transition ${isSaved ? 'bg-green-600 text-white' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}
+              disabled={isLoading}
+              className={`flex items-center gap-2 px-6 py-2.5 rounded-lg font-medium transition ${isSaved ? 'bg-green-600 text-white' : 'bg-blue-600 hover:bg-blue-700 text-white'} ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
-              <Save className="w-4 h-4" />
-              {isSaved ? 'Đã lưu cấu hình' : 'Lưu Cấu Hình'}
+              {isLoading ? <RefreshCw className="w-4 h-4 animate-spin"/> : <Save className="w-4 h-4" />}
+              {isSaved ? 'Đã lưu cấu hình' : 'Lưu Cấu Hình (Lên DB)'}
             </button>
           </div>
         </div>
@@ -216,7 +255,7 @@ const Settings: React.FC = () => {
              <div>
                <h4 className="text-blue-400 font-semibold">Khởi tạo Database</h4>
                <p className="text-sm text-gray-300 mt-1">
-                 Copy đoạn mã SQL dưới đây và chạy trong <strong>Supabase SQL Editor</strong> để tạo các bảng cần thiết.
+                 Copy đoạn mã SQL dưới đây và chạy trong <strong>Supabase SQL Editor</strong> để tạo các bảng cần thiết (bao gồm bảng lưu Keys mới).
                </p>
              </div>
           </div>

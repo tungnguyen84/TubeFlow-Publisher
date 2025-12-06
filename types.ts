@@ -23,7 +23,8 @@ export interface Channel {
   lastSync: string;
   tags: string[];
   youtubeId: string; // ID thật trên YouTube (bắt đầu bằng UC...)
-  accessToken?: string; // Token tạm thời để upload (lưu session)
+  accessToken?: string; // Token lưu trong DB
+  tokenExpiresAt?: number; // Timestamp (ms) khi token hết hạn
 }
 
 export interface ChannelGroup {

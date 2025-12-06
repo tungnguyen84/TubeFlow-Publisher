@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Channel, ChannelStatus } from '../types';
 import { RefreshCw, Trash2, Youtube, ExternalLink, Plus, Search, Loader2, Lock, Unlock, LogIn } from 'lucide-react';
-import { fetchChannels, addChannel, deleteChannel } from '../services/supabaseService';
+import { fetchChannels, addChannel, deleteChannel, updateChannelCredentials, fetchSystemSettings } from '../services/supabaseService';
 import { getChannelInfo, getGoogleAuthUrl, YouTubeChannelInfo } from '../services/youtubeService';
 
 const ChannelManager: React.FC = () => {
@@ -9,8 +9,8 @@ const ChannelManager: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   
-  // Auth state
-  const [authedChannels, setAuthedChannels] = useState<Record<string, boolean>>({});
+  // Auth state (chỉ dùng để force render, giờ logic chính dựa vào channels.accessToken)
+  const [authTrigger, setAuthTrigger] = useState(0);
 
   // Form state
   const [channelIdInput, setChannelIdInput] = useState('');
@@ -29,27 +29,41 @@ const ChannelManager: React.FC = () => {
   };
 
   useEffect(() => {
+    // 1. Load data ban đầu
     loadChannels();
 
-    // KIỂM TRA REDIRECT CALLBACK
-    // Khi Google redirect về, URL sẽ có dạng: http://.../#access_token=...&state=channelId
-    const hash = window.location.hash;
-    if (hash && hash.includes('access_token')) {
-        const params = new URLSearchParams(hash.substring(1)); // bỏ dấu #
-        const accessToken = params.get('access_token');
-        const stateChannelId = params.get('state');
+    // 2. KIỂM TRA REDIRECT CALLBACK & SAVE TO DB
+    const handleAuthCallback = async () => {
+        const hash = window.location.hash;
+        if (hash && hash.includes('access_token')) {
+            const params = new URLSearchParams(hash.substring(1));
+            const accessToken = params.get('access_token');
+            const expiresIn = params.get('expires_in') ? parseInt(params.get('expires_in')!) : 3599;
+            const stateChannelId = params.get('state');
 
-        if (accessToken && stateChannelId) {
-            sessionStorage.setItem(`access_token_${stateChannelId}`, accessToken);
-            setAuthedChannels(prev => ({ ...prev, [stateChannelId]: true }));
-            
-            // Xóa hash khỏi URL để nhìn cho sạch
-            window.history.replaceState(null, '', window.location.pathname);
-            
-            // Thông báo nhỏ
-            // alert(`Đã kết nối thành công kênh ID: ${stateChannelId}`);
+            if (accessToken && stateChannelId) {
+                try {
+                    // LƯU TOKEN VÀO DB SUPABASE
+                    setIsLoading(true);
+                    await updateChannelCredentials(stateChannelId, accessToken, expiresIn);
+                    
+                    // Xóa hash để URL sạch đẹp
+                    window.history.replaceState(null, '', window.location.pathname);
+                    
+                    alert("Kết nối thành công! Token đã được lưu vào Database.");
+                    
+                    // Reload lại để UI cập nhật từ DB
+                    await loadChannels();
+                } catch (e) {
+                    alert("Lỗi khi lưu Token vào Database: " + e);
+                } finally {
+                    setIsLoading(false);
+                }
+            }
         }
-    }
+    };
+
+    handleAuthCallback();
   }, []);
 
   const handleCheckChannel = async () => {
@@ -58,11 +72,23 @@ const ChannelManager: React.FC = () => {
     setErrorMsg('');
     setFoundChannel(null);
 
-    const settings = localStorage.getItem('tubeflow_settings');
-    const apiKey = settings ? JSON.parse(settings).youtubeApiKey : '';
+    // THAY ĐỔI: Ưu tiên lấy từ DB, fallback về localStorage
+    let apiKey = '';
+    try {
+        const dbSettings = await fetchSystemSettings();
+        apiKey = dbSettings.youtubeApiKey;
+    } catch (e) {
+        console.warn("Không load được key từ DB", e);
+    }
+
+    // Nếu DB chưa có (hoặc lỗi), thử lấy ở localStorage
+    if (!apiKey) {
+         const settings = localStorage.getItem('tubeflow_settings');
+         apiKey = settings ? JSON.parse(settings).youtubeApiKey : '';
+    }
 
     if (!apiKey) {
-      setErrorMsg("Chưa có YouTube API Key. Vui lòng vào Cài đặt để thêm.");
+      setErrorMsg("Chưa có YouTube API Key trong Database. Vui lòng vào Cài đặt để thêm và LƯU.");
       setIsChecking(false);
       return;
     }
@@ -114,19 +140,24 @@ const ChannelManager: React.FC = () => {
 
   // Xử lý nút cấp quyền Upload (REDIRECT MODE ONLY)
   const handleAuthorize = async (channelId: string) => {
-    const settings = localStorage.getItem('tubeflow_settings');
-    const clientId = settings ? JSON.parse(settings).googleClientId : '';
+    // THAY ĐỔI: Lấy Client ID từ DB
+    let clientId = '';
+    try {
+        const dbSettings = await fetchSystemSettings();
+        clientId = dbSettings.googleClientId;
+    } catch (e) { console.warn(e); }
 
     if (!clientId) {
-      alert("Vui lòng nhập Google OAuth Client ID trong Cài đặt trước!");
+        const settings = localStorage.getItem('tubeflow_settings');
+        clientId = settings ? JSON.parse(settings).googleClientId : '';
+    }
+
+    if (!clientId) {
+      alert("Vui lòng nhập Google OAuth Client ID trong Cài đặt và LƯU lại trước!");
       return;
     }
 
-    // Lấy URL hiện tại (bỏ hash nếu có) làm Redirect URI
-    // LƯU Ý: URL này phải khớp CHÍNH XÁC với "Authorized redirect URIs" trong Google Console
     const currentUrl = window.location.origin + window.location.pathname;
-    
-    // Tạo link đăng nhập và chuyển hướng ngay lập tức
     const authUrl = getGoogleAuthUrl(clientId, currentUrl, channelId);
     window.location.href = authUrl;
   };
@@ -138,18 +169,25 @@ const ChannelManager: React.FC = () => {
           <h2 className="text-2xl font-bold text-white">Quản lý Kênh</h2>
           <p className="text-gray-400 text-sm mt-1">Kết nối và đồng bộ dữ liệu thực từ YouTube</p>
         </div>
-        <button 
-          onClick={() => setShowAddModal(true)}
-          className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition"
-        >
-          <Plus className="w-5 h-5" />
-          Thêm Kênh
-        </button>
+        <div className="flex gap-2">
+            <button onClick={loadChannels} className="bg-gray-800 hover:bg-gray-700 text-white p-2 rounded-lg transition">
+                 <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin' : ''}`} />
+            </button>
+            <button 
+            onClick={() => setShowAddModal(true)}
+            className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition"
+            >
+            <Plus className="w-5 h-5" />
+            Thêm Kênh
+            </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {channels.map(channel => {
-          const isAuthed = authedChannels[channel.id] || sessionStorage.getItem(`access_token_${channel.id}`);
+          // Kiểm tra xem token còn hạn không
+          const now = Date.now();
+          const hasValidToken = channel.accessToken && channel.tokenExpiresAt && channel.tokenExpiresAt > now;
           
           return (
             <div key={channel.id} className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden relative group hover:border-gray-500 transition">
@@ -171,10 +209,15 @@ const ChannelManager: React.FC = () => {
                 {/* Authorization Status */}
                 <div className="mt-4 p-3 bg-gray-900/50 rounded-lg flex items-center justify-between">
                   <span className="text-xs text-gray-400">Trạng thái Upload:</span>
-                  {isAuthed ? (
-                     <div className="flex items-center gap-1 text-green-400 text-xs font-medium">
-                       <Unlock className="w-3 h-3" />
-                       Sẵn sàng
+                  {hasValidToken ? (
+                     <div className="flex flex-col items-end">
+                        <div className="flex items-center gap-1 text-green-400 text-xs font-medium">
+                            <Unlock className="w-3 h-3" />
+                            Đã kết nối
+                        </div>
+                        <span className="text-[10px] text-gray-500">
+                             Hết hạn: {Math.floor((channel.tokenExpiresAt! - now) / 60000)} phút
+                        </span>
                      </div>
                   ) : (
                     <button 
@@ -182,7 +225,7 @@ const ChannelManager: React.FC = () => {
                       className="flex items-center gap-1 text-white hover:text-blue-200 text-xs font-medium bg-blue-600 hover:bg-blue-700 px-3 py-1.5 rounded transition shadow-lg shadow-blue-900/20"
                     >
                       <LogIn className="w-3 h-3" />
-                      Đăng nhập Google
+                      Kết nối (1h)
                     </button>
                   )}
                 </div>
