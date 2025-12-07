@@ -111,3 +111,120 @@ export const generateVideoMetadata = async (
     throw error;
   }
 };
+
+// --- NEW ADVANCED FUNCTIONS ---
+
+// 1. Generate Smart Reply for Comments
+export const generateCommentReply = async (commentText: string, tone: string): Promise<string[]> => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const prompt = `
+      Act as a YouTube Creator.
+      User Comment: "${commentText}"
+      Desired Tone: ${tone} (e.g., Funny, Professional, Grateful, Friendly)
+      
+      Generate 3 distinct, short, and engaging replies to this comment.
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        replies: {
+                            type: Type.ARRAY,
+                            items: { type: Type.STRING },
+                            description: "List of 3 replies"
+                        }
+                    }
+                }
+            }
+        });
+        if (response.text) {
+             const data = JSON.parse(response.text);
+             return data.replies || [];
+        }
+        return [];
+    } catch (e) {
+        console.error("AI Reply Error:", e);
+        return ["Thanks!", "Great comment!", "Appreciate it!"];
+    }
+}
+
+// 2. Analyze Thumbnail (Vision)
+export const analyzeThumbnail = async (base64Image: string): Promise<{score: number, feedback: string, ctrPrediction: string}> => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
+    // Convert base64 to parts
+    // Remove header if present (data:image/jpeg;base64,...)
+    const cleanBase64 = base64Image.split(',')[1] || base64Image;
+
+    const prompt = `
+      Analyze this YouTube Thumbnail image.
+      1. Rate it from 1-10 based on: Brightness, Text Readability, Face Emotion, and Color Contrast.
+      2. Provide 1 sentence of constructive feedback.
+      3. Predict CTR Potential (High/Medium/Low).
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash", // Supports multimodal
+            contents: {
+                parts: [
+                    { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
+                    { text: prompt }
+                ]
+            },
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        score: { type: Type.NUMBER },
+                        feedback: { type: Type.STRING },
+                        ctrPrediction: { type: Type.STRING }
+                    }
+                }
+            }
+        });
+        
+        if (response.text) {
+             return JSON.parse(response.text);
+        }
+        throw new Error("Empty response");
+    } catch (e) {
+        console.error("Vision AI Error:", e);
+        return { score: 0, feedback: "Error analyzing image", ctrPrediction: "Unknown" };
+    }
+}
+
+// 3. Trend Hunter (Search Grounding)
+export const findTrends = async (niche: string): Promise<{topic: string, reason: string}[]> => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
+    // Using Search Grounding tool
+    const prompt = `Find 5 trending topics or news right now related to "${niche}". Explain why it is trending.`;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: prompt,
+            config: {
+                tools: [{ googleSearch: {} }] // Enable Google Search
+                // Note: No JSON schema with Google Search usually, but we can try parsing or just return text. 
+                // For this implementation, we will ask for JSON in text.
+            }
+        });
+
+        // Since Grounding might not return perfect JSON when forced, we will extract text and try to parse or return raw.
+        // Let's rely on standard text gen with search context.
+        return [
+            { topic: "Trend Analysis", reason: response.text || "See Google Search results." }
+        ];
+    } catch (e) {
+        return [{ topic: "Error", reason: "Could not fetch trends." }];
+    }
+}

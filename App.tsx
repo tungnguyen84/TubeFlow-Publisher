@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { LayoutDashboard, Radio, Clapperboard, CalendarClock, Settings as SettingsIcon, LogOut, UploadCloud, Network, TrendingUp, AlertTriangle } from 'lucide-react';
+import { LayoutDashboard, Radio, Clapperboard, CalendarClock, Settings as SettingsIcon, LogOut, UploadCloud, Network, TrendingUp, AlertTriangle, Sparkles } from 'lucide-react';
 import { View } from './types';
 
 // Components
@@ -13,6 +13,7 @@ import Settings from './components/Settings';
 import ProxyManager from './components/ProxyManager';
 import Analytics from './components/Analytics';
 import SystemLogs from './components/SystemLogs';
+import AdvancedTools from './components/AdvancedTools';
 
 const SidebarItem = ({ 
   icon: Icon, 
@@ -52,7 +53,7 @@ const App: React.FC = () => {
       case View.SCHEDULER:
         return <Scheduler />;
       case View.QUEUE:
-        return <UploadQueue />;
+        return null; // Rendered persistently outside switch
       case View.PROXIES:
         return <ProxyManager />;
       case View.ANALYTICS:
@@ -61,6 +62,8 @@ const App: React.FC = () => {
         return <SystemLogs />;
       case View.SETTINGS:
         return <Settings />;
+      case View.ADVANCED_TOOLS:
+        return <AdvancedTools />;
       default:
         return <Dashboard />;
     }
@@ -89,6 +92,12 @@ const App: React.FC = () => {
             label="Analytics & A/B" 
             active={currentView === View.ANALYTICS}
             onClick={() => setCurrentView(View.ANALYTICS)}
+          />
+          <SidebarItem 
+            icon={Sparkles} 
+            label="Advanced Tools" 
+            active={currentView === View.ADVANCED_TOOLS}
+            onClick={() => setCurrentView(View.ADVANCED_TOOLS)}
           />
           <SidebarItem 
             icon={Radio} 
@@ -145,7 +154,13 @@ const App: React.FC = () => {
       {/* Main Content */}
       <main className="flex-1 overflow-y-auto relative bg-gray-950">
         <div className="max-w-7xl mx-auto p-8">
-          {renderContent()}
+          {/* Persistent UploadQueue: Keeps running even when hidden */}
+          <div className={currentView === View.QUEUE ? 'block' : 'hidden'}>
+            <UploadQueue />
+          </div>
+          
+          {/* Other Views */}
+          {currentView !== View.QUEUE && renderContent()}
         </div>
       </main>
     </div>

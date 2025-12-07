@@ -1,234 +1,319 @@
 
 import React, { useState, useEffect } from 'react';
-import { Channel, VideoItem, VideoAnalytics, ChannelAnalytics } from '../types';
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
-import { Eye, ThumbsUp, MessageSquare, TrendingUp, TrendingDown, Minus, RefreshCw, AlertTriangle, Play, Settings as SettingsIcon } from 'lucide-react';
-import { fetchChannels, fetchVideos } from '../services/supabaseService';
-import { getVideoStatistics } from '../services/youtubeService';
+import { Channel, YouTubeVideoStats } from '../types';
+import { Eye, ThumbsUp, MessageSquare, TrendingUp, RefreshCw, Play, BarChart2, CalendarClock, ChevronRight, Video, Users } from 'lucide-react';
+import { fetchChannels, fetchSystemSettings, updateChannelStats } from '../services/supabaseService';
+import { getChannelInfo, getChannelVideos } from '../services/youtubeService';
 
 const Analytics: React.FC = () => {
   const [channels, setChannels] = useState<Channel[]>([]);
-  const [recentVideos, setRecentVideos] = useState<VideoAnalytics[]>([]);
+  const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
+  const [channelVideos, setChannelVideos] = useState<YouTubeVideoStats[]>([]);
+  
   const [isLoading, setIsLoading] = useState(false);
-  const [totalViews, setTotalViews] = useState(0);
-  const [totalSubs, setTotalSubs] = useState(0);
+  const [isSyncing, setIsSyncing] = useState<string | null>(null); // Channel ID being synced
+  const [apiKey, setApiKey] = useState('');
 
-  // A/B Test UI State
-  const [abTestVideoId, setAbTestVideoId] = useState('');
-  const [abVariantA, setAbVariantA] = useState('');
-  const [abVariantB, setAbVariantB] = useState('');
-
-  const loadData = async () => {
+  const loadChannels = async () => {
       setIsLoading(true);
       try {
-          // 1. Fetch Channels for Total Subs
-          const chData = await fetchChannels();
+          const [chData, settings] = await Promise.all([
+              fetchChannels(),
+              fetchSystemSettings()
+          ]);
           setChannels(chData);
-          const subs = chData.reduce((acc, c) => acc + (c.subscriberCount || 0), 0);
-          setTotalSubs(subs);
-
-          // 2. Fetch Recent Uploaded Videos (Last 24h - 48h ideally, but let's take last 10 completed)
-          // We filter locally for now.
-          const allVideos = await fetchVideos({ limit: 50, status: 'PUBLISHED' });
-          const uploadedVideos = allVideos.filter(v => v.youtubeVideoId && v.channelId); // Only videos with YouTube ID
-          
-          if (uploadedVideos.length > 0) {
-              // Group videos by Channel to use the correct Access Token
-              // Note: Ideally we batch requests per channel token. 
-              // Simplification: We iterate channels, find their videos, fetch stats.
-              
-              let analyticsData: VideoAnalytics[] = [];
-              let grandTotalViews = 0;
-
-              for (const channel of chData) {
-                  if (!channel.accessToken) continue;
-                  
-                  const vidsOfChannel = uploadedVideos.filter(v => v.channelId === channel.id);
-                  if (vidsOfChannel.length === 0) continue;
-
-                  const videoIds = vidsOfChannel.map(v => v.youtubeVideoId!);
-                  const stats = await getVideoStatistics(videoIds, channel.accessToken);
-                  
-                  // Merge DB data with YouTube Stats
-                  const merged = stats.map(s => {
-                      grandTotalViews += s.viewCount;
-                      // Logic đánh giá performance giả định (VD: view > 100 là HIGH)
-                      let performance: 'HIGH'|'AVG'|'LOW' = 'AVG';
-                      if (s.viewCount > 1000) performance = 'HIGH';
-                      if (s.viewCount < 50) performance = 'LOW';
-                      
-                      return {
-                          id: s.id,
-                          title: s.title,
-                          channelName: channel.name,
-                          publishedAt: new Date(s.publishedAt).toLocaleString('vi-VN'),
-                          thumbnailUrl: s.thumbnailUrl,
-                          stats: {
-                              viewCount: s.viewCount,
-                              likeCount: s.likeCount,
-                              commentCount: s.commentCount
-                          },
-                          performance
-                      };
-                  });
-                  analyticsData = [...analyticsData, ...merged];
-              }
-              setRecentVideos(analyticsData.sort((a,b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()));
-              setTotalViews(grandTotalViews);
-          }
+          setApiKey(settings.youtubeApiKey);
       } catch (e) {
-          console.error("Analytics Load Error", e);
+          console.error(e);
       } finally {
           setIsLoading(false);
       }
   };
 
   useEffect(() => {
-      loadData();
+      loadChannels();
   }, []);
 
+  const handleSyncChannel = async (channel: Channel) => {
+      if (!apiKey) return alert("Thiếu YouTube API Key trong Settings!");
+      
+      setIsSyncing(channel.id);
+      try {
+          // 1. Fetch updated Channel Info (Subs, Views, Video Count)
+          const info = await getChannelInfo(channel.youtubeId, apiKey);
+          
+          if (info) {
+              let finalTotalViews = info.totalViews;
+
+              // --- AUTO-CORRECTION LOGIC ---
+              // Nếu YouTube trả về 0 view nhưng có video, ta sẽ thử tính tổng từ danh sách video
+              if (finalTotalViews === 0 && info.videoCount > 0) {
+                   try {
+                       console.log("YouTube reported 0 views. Attempting to calculate from recent videos...");
+                       // Lấy danh sách video để cộng dồn
+                       const vids = await getChannelVideos(channel.youtubeId, channel.accessToken || null, apiKey);
+                       const calculatedViews = vids.reduce((sum, v) => sum + v.viewCount, 0);
+                       if (calculatedViews > 0) {
+                           finalTotalViews = calculatedViews;
+                           console.log(`Auto-corrected views: ${calculatedViews}`);
+                       }
+                   } catch (err) {
+                       console.warn("Could not auto-correct views:", err);
+                   }
+              }
+              // -----------------------------
+
+              // Save to Database
+              await updateChannelStats(channel.id, {
+                  subscriberCount: info.subscriberCount,
+                  totalViews: finalTotalViews,
+                  videoCount: info.videoCount
+              });
+              
+              const newSyncTime = new Date().toISOString();
+
+              // Update local state (CHANNELS LIST)
+              setChannels(prev => prev.map(c => c.id === channel.id ? { 
+                  ...c, 
+                  subscriberCount: info.subscriberCount,
+                  totalViews: finalTotalViews,
+                  videoCount: info.videoCount,
+                  lastStatsSync: newSyncTime
+              } : c));
+
+              // Update local state (SELECTED CHANNEL DETAIL)
+              if (selectedChannel?.id === channel.id) {
+                  setSelectedChannel(prev => prev ? ({
+                      ...prev,
+                      subscriberCount: info.subscriberCount,
+                      totalViews: finalTotalViews,
+                      videoCount: info.videoCount,
+                      lastStatsSync: newSyncTime,
+                      avatarUrl: info.thumbnailUrl || prev.avatarUrl,
+                      name: info.title || prev.name
+                  }) : null);
+              }
+              
+              alert(`Cập nhật thành công!\n- Subs: ${info.subscriberCount?.toLocaleString()}\n- Views: ${finalTotalViews?.toLocaleString()}\n- Videos: ${info.videoCount?.toLocaleString()}`);
+          } else {
+              alert("Không lấy được thông tin kênh. Có thể ID kênh sai hoặc kênh đã bị xóa/ẩn.");
+          }
+      } catch (e: any) {
+          console.error(e);
+          alert("Lỗi Sync (Có thể do Quota/Mạng/Sai ID): " + e.message);
+      } finally {
+          setIsSyncing(null);
+      }
+  };
+
+  const handleSelectChannel = async (channel: Channel) => {
+      setSelectedChannel(channel);
+      setChannelVideos([]); // Clear old list
+      setIsLoading(true);
+      try {
+           if (!apiKey) throw new Error("Chưa cấu hình API Key trong Settings! Vui lòng vào cài đặt.");
+           
+           // Fetch Video List from YouTube
+           const vids = await getChannelVideos(channel.youtubeId, channel.accessToken || null, apiKey);
+           setChannelVideos(vids);
+
+           // --- CHECK & FIX LOCAL VIEW COUNT ---
+           // Nếu lúc load video thấy tổng view thực tế > 0 mà channel.totalViews vẫn bằng 0 -> Update DB luôn
+           if (vids.length > 0) {
+               const realTotalViews = vids.reduce((sum, v) => sum + v.viewCount, 0);
+               if (realTotalViews > 0 && (channel.totalViews === 0 || !channel.totalViews)) {
+                   console.log("Fixing 0 views based on loaded video list...");
+                   await updateChannelStats(channel.id, { totalViews: realTotalViews });
+                   
+                   // Update UI immediately
+                   setSelectedChannel(prev => prev ? ({ ...prev, totalViews: realTotalViews }) : null);
+                   setChannels(prev => prev.map(c => c.id === channel.id ? { ...c, totalViews: realTotalViews } : c));
+               }
+           }
+
+      } catch (e: any) {
+          console.error(e);
+          alert("Lỗi tải danh sách video: " + e.message);
+      } finally {
+          setIsLoading(false);
+      }
+  };
+
+  const checkSyncNeeded = (lastSync?: string) => {
+      if (!lastSync) return true;
+      const last = new Date(lastSync).getTime();
+      const now = Date.now();
+      const hoursDiff = (now - last) / (1000 * 60 * 60);
+      return hoursDiff >= 24;
+  };
+
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
+    <div className="space-y-6 h-[calc(100vh-100px)] flex flex-col">
+      <div className="flex justify-between items-center shrink-0">
         <div>
            <h2 className="text-2xl font-bold text-white flex items-center gap-2">
-             <TrendingUp className="w-6 h-6 text-purple-500" />
-             Analytics Center
+             <BarChart2 className="w-6 h-6 text-purple-500" />
+             Analytics & Channel Stats
            </h2>
-           <p className="text-gray-400 text-sm mt-1">Theo dõi hiệu suất Real-time & A/B Testing</p>
+           <p className="text-gray-400 text-sm mt-1">Cập nhật số liệu kênh & danh sách video (24h/lần)</p>
         </div>
-        <button onClick={loadData} className="bg-gray-800 hover:bg-gray-700 text-white p-2 rounded-lg border border-gray-700">
+        <button onClick={loadChannels} className="bg-gray-800 hover:bg-gray-700 text-white p-2 rounded-lg border border-gray-700">
              <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin' : ''}`} />
         </button>
       </div>
 
-      {/* OVERVIEW CARDS */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-gray-800 p-5 rounded-xl border border-gray-700">
-              <p className="text-gray-400 text-xs font-bold uppercase">Tổng Views (Các video gần đây)</p>
-              <div className="flex items-center gap-2 mt-2">
-                  <Eye className="w-6 h-6 text-blue-500" />
-                  <span className="text-2xl font-bold text-white">{totalViews.toLocaleString()}</span>
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1 min-h-0">
+          {/* LEFT: CHANNEL LIST */}
+          <div className="lg:col-span-4 bg-gray-800 rounded-xl border border-gray-700 flex flex-col overflow-hidden">
+              <div className="p-4 border-b border-gray-700 bg-gray-900/50">
+                  <h3 className="font-bold text-white">Danh sách Kênh</h3>
+              </div>
+              <div className="overflow-y-auto flex-1 p-2 space-y-2">
+                  {channels.map(ch => {
+                      const needsSync = checkSyncNeeded(ch.lastStatsSync);
+                      return (
+                        <div 
+                            key={ch.id} 
+                            onClick={() => handleSelectChannel(ch)}
+                            className={`p-3 rounded-lg border cursor-pointer transition flex items-center gap-3 relative overflow-hidden
+                            ${selectedChannel?.id === ch.id ? 'bg-purple-900/20 border-purple-500' : 'bg-gray-900 border-gray-800 hover:border-gray-600'}`}
+                        >
+                            <img src={ch.avatarUrl} className="w-10 h-10 rounded-full border border-gray-600 shrink-0" />
+                            <div className="flex-1 min-w-0">
+                                <h4 className="text-white font-bold truncate">{ch.name}</h4>
+                                <div className="flex gap-3 text-xs text-gray-400">
+                                    <span className="flex items-center gap-1"><Users className="w-3 h-3"/> {ch.subscriberCount?.toLocaleString() || 0}</span>
+                                    <span className="flex items-center gap-1"><Eye className="w-3 h-3"/> {ch.totalViews?.toLocaleString() || 0}</span>
+                                </div>
+                            </div>
+                            
+                            {/* Status Indicator */}
+                            <div className="flex flex-col items-end gap-1">
+                                <ChevronRight className="w-4 h-4 text-gray-600" />
+                                {needsSync && (
+                                    <button 
+                                        onClick={(e) => { e.stopPropagation(); handleSyncChannel(ch); }}
+                                        disabled={isSyncing === ch.id}
+                                        className="text-[10px] bg-yellow-900/50 text-yellow-500 border border-yellow-800 px-1.5 py-0.5 rounded flex items-center gap-1 hover:bg-yellow-900"
+                                        title="Dữ liệu cũ > 24h. Bấm để cập nhật."
+                                    >
+                                        <RefreshCw className={`w-3 h-3 ${isSyncing === ch.id ? 'animate-spin' : ''}`} />
+                                        Update
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                      )
+                  })}
               </div>
           </div>
-          <div className="bg-gray-800 p-5 rounded-xl border border-gray-700">
-              <p className="text-gray-400 text-xs font-bold uppercase">Tổng Subscribers</p>
-              <div className="flex items-center gap-2 mt-2">
-                  <Play className="w-6 h-6 text-red-500" />
-                  <span className="text-2xl font-bold text-white">{totalSubs.toLocaleString()}</span>
-              </div>
-          </div>
-          <div className="bg-gray-800 p-5 rounded-xl border border-gray-700">
-              <p className="text-gray-400 text-xs font-bold uppercase">Doanh Thu Ước Tính</p>
-              <div className="flex items-center gap-2 mt-2">
-                  <span className="text-2xl font-bold text-green-400">$0.00</span>
-                  <span className="text-xs bg-gray-700 text-gray-400 px-1 rounded ml-2">Cần API Scope Analytics</span>
-              </div>
-          </div>
-      </div>
 
-      {/* REAL-TIME WATCH */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Recent Video Performance List */}
-          <div className="lg:col-span-2 bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
-              <div className="p-5 border-b border-gray-700 flex justify-between items-center">
-                  <h3 className="font-bold text-white flex items-center gap-2">
-                      <TrendingUp className="w-5 h-5 text-green-500" />
-                      Hiệu suất Video Mới (Real-time Watch)
-                  </h3>
-              </div>
-              <div className="overflow-x-auto">
-                  <table className="w-full text-left">
-                      <thead className="bg-gray-900/50 text-gray-400 text-xs uppercase">
-                          <tr>
-                              <th className="p-4">Video</th>
-                              <th className="p-4">Views</th>
-                              <th className="p-4">Engage</th>
-                              <th className="p-4">Đánh giá</th>
-                          </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-700 text-sm">
-                          {recentVideos.length === 0 ? (
-                              <tr><td colSpan={4} className="p-6 text-center text-gray-500">Chưa có video nào được upload gần đây hoặc chưa có ID.</td></tr>
+          {/* RIGHT: CHANNEL DETAIL & VIDEOS */}
+          <div className="lg:col-span-8 bg-gray-800 rounded-xl border border-gray-700 flex flex-col overflow-hidden">
+              {selectedChannel ? (
+                  <>
+                      {/* Header Detail */}
+                      <div className="p-6 border-b border-gray-700 bg-gradient-to-r from-gray-900 to-gray-800 shrink-0">
+                          <div className="flex justify-between items-start">
+                              <div className="flex items-center gap-4">
+                                  <img src={selectedChannel.avatarUrl} className="w-16 h-16 rounded-full border-2 border-purple-500 shadow-lg" />
+                                  <div>
+                                      <h2 className="text-2xl font-bold text-white">{selectedChannel.name}</h2>
+                                      <p className="text-gray-400 text-sm">Last Sync: {selectedChannel.lastStatsSync ? new Date(selectedChannel.lastStatsSync).toLocaleString('vi-VN') : 'Chưa cập nhật'}</p>
+                                  </div>
+                              </div>
+                              <button 
+                                  onClick={() => handleSyncChannel(selectedChannel)}
+                                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition"
+                                  disabled={isSyncing === selectedChannel.id}
+                              >
+                                  <RefreshCw className={`w-4 h-4 ${isSyncing === selectedChannel.id ? 'animate-spin' : ''}`} />
+                                  Sync Data Now
+                              </button>
+                          </div>
+                          
+                          <div className="grid grid-cols-3 gap-4 mt-6">
+                              <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                                  <div className="flex items-center gap-2 text-gray-400 mb-1 text-xs font-bold uppercase">
+                                      <Users className="w-4 h-4 text-red-500" /> Subscribers
+                                  </div>
+                                  <span className="text-2xl font-bold text-white">{selectedChannel.subscriberCount?.toLocaleString() || 0}</span>
+                              </div>
+                              <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                                  <div className="flex items-center gap-2 text-gray-400 mb-1 text-xs font-bold uppercase">
+                                      <Eye className="w-4 h-4 text-blue-500" /> Total Views
+                                  </div>
+                                  <span className="text-2xl font-bold text-white">{selectedChannel.totalViews?.toLocaleString() || 0}</span>
+                              </div>
+                              <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                                  <div className="flex items-center gap-2 text-gray-400 mb-1 text-xs font-bold uppercase">
+                                      <Video className="w-4 h-4 text-green-500" /> Total Videos
+                                  </div>
+                                  <span className="text-2xl font-bold text-white">{selectedChannel.videoCount?.toLocaleString() || 0}</span>
+                              </div>
+                          </div>
+                      </div>
+
+                      {/* Video List Table */}
+                      <div className="flex-1 overflow-y-auto p-0 bg-gray-900">
+                          {isLoading && channelVideos.length === 0 ? (
+                              <div className="flex items-center justify-center h-40 text-gray-400">
+                                  <RefreshCw className="w-6 h-6 animate-spin mr-2"/> Đang tải danh sách video...
+                              </div>
                           ) : (
-                              recentVideos.map(vid => (
-                                  <tr key={vid.id} className="hover:bg-gray-750">
-                                      <td className="p-4">
-                                          <div className="flex gap-3">
-                                              <img src={vid.thumbnailUrl} className="w-12 h-8 object-cover rounded" />
-                                              <div>
-                                                  <p className="font-medium text-white truncate max-w-[150px]" title={vid.title}>{vid.title}</p>
-                                                  <p className="text-[10px] text-gray-400">{vid.channelName} • {vid.publishedAt}</p>
-                                              </div>
-                                          </div>
-                                      </td>
-                                      <td className="p-4 font-mono text-white">{vid.stats.viewCount.toLocaleString()}</td>
-                                      <td className="p-4">
-                                          <div className="flex gap-3 text-xs text-gray-400">
-                                              <span className="flex items-center gap-1"><ThumbsUp className="w-3 h-3"/> {vid.stats.likeCount}</span>
-                                              <span className="flex items-center gap-1"><MessageSquare className="w-3 h-3"/> {vid.stats.commentCount}</span>
-                                          </div>
-                                      </td>
-                                      <td className="p-4">
-                                          {vid.performance === 'HIGH' && <span className="text-xs bg-green-900 text-green-400 px-2 py-1 rounded flex w-fit items-center gap-1"><TrendingUp className="w-3 h-3"/> Tốt</span>}
-                                          {vid.performance === 'LOW' && <span className="text-xs bg-red-900 text-red-400 px-2 py-1 rounded flex w-fit items-center gap-1"><TrendingDown className="w-3 h-3"/> Thấp</span>}
-                                          {vid.performance === 'AVG' && <span className="text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded flex w-fit items-center gap-1"><Minus className="w-3 h-3"/> TB</span>}
-                                      </td>
-                                  </tr>
-                              ))
+                             <table className="w-full text-left border-collapse">
+                                <thead className="bg-gray-950 text-gray-400 text-xs uppercase sticky top-0 z-10">
+                                    <tr>
+                                        <th className="p-4 border-b border-gray-800">Video</th>
+                                        <th className="p-4 border-b border-gray-800">Views</th>
+                                        <th className="p-4 border-b border-gray-800">Likes</th>
+                                        <th className="p-4 border-b border-gray-800">Comments</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-800 text-sm">
+                                    {channelVideos.length === 0 ? (
+                                        <tr><td colSpan={4} className="p-8 text-center text-gray-500">
+                                            Không tìm thấy video nào. <br/>
+                                            (Có thể do lỗi API Quota hoặc Kênh chưa có video public)
+                                        </td></tr>
+                                    ) : (
+                                        channelVideos.map(vid => (
+                                            <tr key={vid.id} className="hover:bg-gray-800">
+                                                <td className="p-4">
+                                                    <div className="flex gap-3">
+                                                        <img src={vid.thumbnailUrl} className="w-16 h-9 object-cover rounded bg-gray-800" />
+                                                        <div className="min-w-0">
+                                                            <p className="font-medium text-white truncate max-w-[300px]" title={vid.title}>{vid.title}</p>
+                                                            <p className="text-xs text-gray-500 flex items-center gap-1">
+                                                                <CalendarClock className="w-3 h-3"/>
+                                                                {new Date(vid.publishedAt).toLocaleDateString('vi-VN')}
+                                                            </p>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td className="p-4 font-mono text-white">
+                                                    <span className="flex items-center gap-1"><Eye className="w-3 h-3 text-gray-500"/> {vid.viewCount.toLocaleString()}</span>
+                                                </td>
+                                                <td className="p-4 font-mono text-white">
+                                                    <span className="flex items-center gap-1"><ThumbsUp className="w-3 h-3 text-gray-500"/> {vid.likeCount.toLocaleString()}</span>
+                                                </td>
+                                                <td className="p-4 font-mono text-white">
+                                                    <span className="flex items-center gap-1"><MessageSquare className="w-3 h-3 text-gray-500"/> {vid.commentCount.toLocaleString()}</span>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
+                                </tbody>
+                             </table>
                           )}
-                      </tbody>
-                  </table>
-              </div>
-          </div>
-
-          {/* A/B Testing Tool */}
-          <div className="bg-gray-800 rounded-xl border border-gray-700 p-5">
-              <h3 className="font-bold text-white mb-4 flex items-center gap-2">
-                  <SettingsIcon className="w-5 h-5 text-blue-500" />
-                  A/B Testing Metadata
-              </h3>
-              <p className="text-xs text-gray-400 mb-4">
-                  Cấu hình thay đổi Tiêu đề nếu CTR thấp sau 24h. (Tính năng này cần backend worker để tự động chạy).
-              </p>
-              
-              <div className="space-y-3">
-                  <div>
-                      <label className="text-xs text-gray-500 font-bold uppercase">Chọn Video (ID)</label>
-                      <select 
-                        className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white text-sm mt-1"
-                        value={abTestVideoId}
-                        onChange={e => setAbTestVideoId(e.target.value)}
-                      >
-                          <option value="">-- Chọn Video --</option>
-                          {recentVideos.map(v => <option key={v.id} value={v.id}>{v.title.substring(0, 30)}...</option>)}
-                      </select>
+                      </div>
+                  </>
+              ) : (
+                  <div className="flex-1 flex flex-col items-center justify-center text-gray-500">
+                      <BarChart2 className="w-16 h-16 mb-4 text-gray-700" />
+                      <p>Chọn một kênh bên trái để xem chi tiết</p>
                   </div>
-
-                  <div className="p-3 bg-gray-900 rounded border border-gray-600">
-                      <span className="text-xs bg-blue-900 text-blue-300 px-1 rounded">Variant A (Hiện tại)</span>
-                      <p className="text-sm text-white mt-1 truncate">
-                          {recentVideos.find(v => v.id === abTestVideoId)?.title || '(Chưa chọn video)'}
-                      </p>
-                  </div>
-
-                  <div>
-                      <label className="text-xs text-gray-500 font-bold uppercase">Variant B (Dự phòng)</label>
-                      <input 
-                        className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white text-sm mt-1"
-                        placeholder="Nhập tiêu đề thay thế hấp dẫn hơn..."
-                        value={abVariantB}
-                        onChange={e => setAbVariantB(e.target.value)}
-                      />
-                  </div>
-
-                  <button className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded font-bold text-sm">
-                      Lưu Cấu Hình A/B
-                  </button>
-                  <p className="text-[10px] text-yellow-500 italic mt-2">
-                      * Lưu ý: Hệ thống sẽ cần module backend để kiểm tra Views sau 24h và tự động gọi API đổi tên nếu Views &lt; Avg.
-                  </p>
-              </div>
+              )}
           </div>
       </div>
     </div>

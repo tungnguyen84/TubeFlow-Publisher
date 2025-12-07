@@ -1,24 +1,26 @@
 
 import React, { useState, useEffect } from 'react';
 import { VideoItem, Channel, ScheduleTemplate, TimeSlot } from '../types';
-import { Calendar as CalendarIcon, Clock, Check, Plus, RefreshCw, Lock, Trash2, PlayCircle, Zap, Layers, Calculator, Save, Sparkles, Globe } from 'lucide-react';
-import { fetchVideos, fetchChannels, createJob, fetchScheduleTemplates, saveScheduleTemplate, deleteScheduleTemplate, updateChannelTemplate } from '../services/supabaseService';
+import { Calendar as CalendarIcon, Clock, Check, Plus, RefreshCw, Lock, Trash2, PlayCircle, Zap, Layers, Calculator, Save, Sparkles, Globe, Circle, CheckCircle2, Video, AlertTriangle, Info } from 'lucide-react';
+import { fetchVideos, fetchChannels, createJob, fetchScheduleTemplates, saveScheduleTemplate, deleteScheduleTemplate, updateChannelTemplate, fetchDraftCounts } from '../services/supabaseService';
 import { getBestUploadTimes } from '../services/geminiService';
 
 const Scheduler: React.FC = () => {
-  const [mode, setMode] = useState<'MANUAL' | 'AUTO_SHORTS'>('MANUAL');
+  const [mode, setMode] = useState<'MANUAL' | 'AUTO_SHORTS'>('AUTO_SHORTS');
   
   // COMMON DATA
-  const [videos, setVideos] = useState<VideoItem[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [draftCounts, setDraftCounts] = useState<Record<string, number>>({}); // {channelId: count}
   const [isLoading, setIsLoading] = useState(false);
 
   // MANUAL MODE STATE
+  const [manualVideos, setManualVideos] = useState<VideoItem[]>([]);
   const [selectedVideo, setSelectedVideo] = useState<string>('');
   const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
   const [manualDate, setManualDate] = useState<string>('');
   const [manualTime, setManualTime] = useState<string>('12:00');
   const [manualSuccessMsg, setManualSuccessMsg] = useState('');
+  const [isLoadingVideos, setIsLoadingVideos] = useState(false);
 
   // AUTO SHORTS MODE STATE
   const [templates, setTemplates] = useState<ScheduleTemplate[]>([]);
@@ -39,39 +41,89 @@ const Scheduler: React.FC = () => {
   const [autoStartDate, setAutoStartDate] = useState(new Date().toISOString().split('T')[0]);
   const [isGenerating, setIsGenerating] = useState(false);
 
+  // --- CUSTOM MODAL STATE ---
+  const [modal, setModal] = useState<{
+    isOpen: boolean;
+    type: 'CONFIRM' | 'ALERT' | 'INFO';
+    title: string;
+    message: string;
+    onConfirm?: () => void;
+  }>({ isOpen: false, type: 'INFO', title: '', message: '' });
+
+  const showConfirm = (title: string, message: string, onConfirm: () => void) => {
+    setModal({ isOpen: true, type: 'CONFIRM', title, message, onConfirm });
+  };
+
+  const closeModal = () => {
+    setModal(prev => ({ ...prev, isOpen: false }));
+  };
+
   const loadData = async () => {
     setIsLoading(true);
-    const [v, c, t] = await Promise.all([fetchVideos(), fetchChannels(), fetchScheduleTemplates()]);
-    setVideos(v);
-    setChannels(c);
-    setTemplates(t);
-    setIsLoading(false);
+    try {
+        const [c, t, dCounts] = await Promise.all([
+            fetchChannels(), 
+            fetchScheduleTemplates(),
+            fetchDraftCounts()
+        ]);
+        setChannels(c);
+        setTemplates(t);
+        setDraftCounts(dCounts);
+
+        // Load Default Videos (All Orphans or All Drafts)
+        loadDefaultManualVideos();
+
+    } catch (e) {
+        console.error(e);
+    } finally {
+        setIsLoading(false);
+    }
   };
+
+  const loadDefaultManualVideos = async () => {
+      // Load ALL drafts (Limit 5000 triggers chunked loading in service)
+      const v = await fetchVideos({ status: 'DRAFT', limit: 5000 });
+      setManualVideos(v);
+  }
 
   useEffect(() => {
     loadData();
   }, []);
 
   // --- MANUAL MODE HANDLERS ---
-  const currentVideo = videos.find(v => v.id === selectedVideo);
-
-  useEffect(() => {
-      if (mode === 'MANUAL' && currentVideo && currentVideo.channelId) {
-          setSelectedChannels([currentVideo.channelId]);
-      }
-  }, [selectedVideo, mode]);
-
-  const handleManualToggleChannel = (id: string) => {
-    if (currentVideo?.channelId && currentVideo.channelId !== id) {
-        alert(`Video này thuộc về kênh "${currentVideo.channelName}". Không thể chọn kênh khác.`);
+  
+  // Update: Single Select Logic & Filter Videos
+  const handleManualToggleChannel = async (id: string) => {
+    // If selecting same channel, deselect and show default videos
+    if (selectedChannels.includes(id)) {
+        setSelectedChannels([]); 
+        setSelectedVideo('');
+        loadDefaultManualVideos();
         return;
     }
-    if (currentVideo?.channelId && currentVideo.channelId === id) return;
 
-    if (selectedChannels.includes(id)) {
-      setSelectedChannels(selectedChannels.filter(c => c !== id));
-    } else {
-      setSelectedChannels([...selectedChannels, id]);
+    // New Channel Selected
+    setSelectedChannels([id]); // Enforce Single Select
+    setSelectedVideo(''); // Reset selected video
+    setIsLoadingVideos(true);
+
+    try {
+        // Fetch ALL videos for this channel AND Orphan videos
+        const [chVideos, orphanVideos] = await Promise.all([
+            fetchVideos({ channelId: id, status: 'DRAFT', limit: 5000 }),
+            fetchVideos({ isOrphan: true, status: 'DRAFT', limit: 5000 })
+        ]);
+
+        // Merge and sort
+        const merged = [...chVideos, ...orphanVideos];
+        // Sort by created desc (optional) or name
+        // merged.sort((a,b) => b.filename.localeCompare(a.filename)); // Example sort
+        
+        setManualVideos(merged);
+    } catch (e) {
+        console.error(e);
+    } finally {
+        setIsLoadingVideos(false);
     }
   };
 
@@ -93,7 +145,7 @@ const Scheduler: React.FC = () => {
       setTimeout(() => {
           setManualSuccessMsg('');
           setSelectedVideo('');
-          setSelectedChannels([]);
+          // Optional: clear channel selection or keep it
       }, 3000);
     } catch (error) {
        alert("Lỗi tạo job: " + error);
@@ -135,13 +187,21 @@ const Scheduler: React.FC = () => {
       }
   };
 
-  const handleDeleteTemplate = async (id: string) => {
-      if (confirm("Xóa lịch mẫu này?")) {
-          await deleteScheduleTemplate(id);
-          const t = await fetchScheduleTemplates();
-          setTemplates(t);
-          if (currentTemplateId === id) setCurrentTemplateId(null);
-      }
+  const handleDeleteTemplate = (e: React.MouseEvent, id: string) => {
+      e.stopPropagation(); // Stop bubbling to list item click
+      showConfirm("Xác nhận xóa", "Bạn có chắc chắn muốn xóa Lịch Mẫu này không?", async () => {
+          try {
+              await deleteScheduleTemplate(id);
+              const t = await fetchScheduleTemplates();
+              setTemplates(t);
+              if (currentTemplateId === id) {
+                  setCurrentTemplateId(null);
+                  setTempName('');
+              }
+          } catch (err: any) {
+              console.error(err);
+          }
+      });
   };
 
   const loadTemplateToForm = (t: ScheduleTemplate) => {
@@ -183,22 +243,20 @@ const Scheduler: React.FC = () => {
   };
 
   // --- LOGIC TÍNH TOÁN & GENERATE ---
-  const getDraftVideosForChannel = (channelId: string) => {
-      return videos
-        .filter(v => v.channelId === channelId && v.status === 'DRAFT')
-        .sort((a, b) => a.filename.localeCompare(b.filename)); // A-Z
+  // Sử dụng draftCounts thay vì filter array
+  const getDraftCount = (channelId: string) => {
+      return draftCounts[channelId] || 0;
   };
 
   const calculateEndDate = (channelId: string) => {
-      const drafts = getDraftVideosForChannel(channelId);
-      const totalVideos = drafts.length;
-      if (totalVideos === 0) return "Hết video";
+      const count = getDraftCount(channelId);
+      if (count === 0) return "Hết video";
 
       const videosPerCycle = tempSlots.reduce((sum, slot) => sum + Number(slot.count), 0);
       if (videosPerCycle === 0) return "Lỗi config";
 
       // Số chu kỳ cần = ceil(total / perCycle)
-      const cyclesNeeded = Math.ceil(totalVideos / videosPerCycle);
+      const cyclesNeeded = Math.ceil(count / videosPerCycle);
       const daysNeeded = cyclesNeeded * tempCycle;
       
       const endDate = new Date(autoStartDate);
@@ -221,8 +279,12 @@ const Scheduler: React.FC = () => {
                  await updateChannelTemplate(channelId, currentTemplateId);
               }
 
-              // 2. Tạo jobs
-              const channelVideos = getDraftVideosForChannel(channelId);
+              // 2. Fetch REAL videos (LAZY LOAD) - Chỉ lấy video của kênh này
+              // Limit 5000 để đảm bảo lấy đủ cho 1 đợt lập lịch dài
+              const channelVideos = await fetchVideos({ channelId: channelId, status: 'DRAFT', limit: 5000 });
+              // Sort A-Z
+              channelVideos.sort((a, b) => a.filename.localeCompare(b.filename));
+
               if (channelVideos.length === 0) continue;
 
               let videoIndex = 0;
@@ -268,7 +330,45 @@ const Scheduler: React.FC = () => {
   };
 
   return (
-    <div className="h-full flex flex-col gap-6">
+    <div className="h-full flex flex-col gap-6 relative">
+      {/* --- CUSTOM MODAL --- */}
+      {modal.isOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+              <div className="bg-gray-900 rounded-2xl border border-gray-700 w-full max-w-md shadow-2xl scale-100 transform transition-all">
+                  <div className="p-6">
+                      <div className="flex items-start gap-4">
+                          <div className={`p-3 rounded-full shrink-0 ${modal.type === 'CONFIRM' ? 'bg-red-900/30 text-red-500' : 'bg-blue-900/30 text-blue-500'}`}>
+                              {modal.type === 'CONFIRM' ? <AlertTriangle className="w-6 h-6" /> : <Info className="w-6 h-6" />}
+                          </div>
+                          <div>
+                              <h3 className="text-xl font-bold text-white mb-2">{modal.title}</h3>
+                              <p className="text-gray-300 text-sm whitespace-pre-wrap leading-relaxed">{modal.message}</p>
+                          </div>
+                      </div>
+                  </div>
+                  <div className="bg-gray-800/50 p-4 border-t border-gray-700 flex justify-end gap-3 rounded-b-2xl">
+                      <button 
+                          onClick={closeModal} 
+                          className="px-4 py-2 text-gray-400 hover:text-white font-medium hover:bg-gray-800 rounded transition"
+                      >
+                          {modal.type === 'CONFIRM' ? 'Hủy Bỏ' : 'Đã Hiểu'}
+                      </button>
+                      {modal.type === 'CONFIRM' && (
+                          <button 
+                              onClick={() => {
+                                  if (modal.onConfirm) modal.onConfirm();
+                                  closeModal();
+                              }}
+                              className="px-5 py-2 bg-red-600 hover:bg-red-700 text-white rounded font-bold shadow-lg shadow-red-900/20 transition flex items-center gap-2"
+                          >
+                              <Trash2 className="w-4 h-4" /> Xác Nhận Xóa
+                          </button>
+                      )}
+                  </div>
+              </div>
+          </div>
+      )}
+
       {/* HEADER & TABS */}
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-white flex items-center gap-2">
@@ -295,78 +395,88 @@ const Scheduler: React.FC = () => {
       {/* --- CONTENT: MANUAL MODE --- */}
       {mode === 'MANUAL' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <div className="lg:col-span-2 space-y-6">
-                {/* 1. Video Selector */}
+            <div className="lg:col-span-2 space-y-6 flex flex-col-reverse lg:flex-col">
+                {/* 2. Channel Selector (Moved logic up for UX flow but position same) */}
                 <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
-                <h3 className="text-lg font-medium text-white mb-4">1. Chọn Video Nguồn</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[300px] overflow-y-auto pr-2">
-                    {videos.map(vid => (
-                    <div 
-                        key={vid.id}
-                        onClick={() => setSelectedVideo(vid.id!)}
-                        className={`p-4 rounded-lg border cursor-pointer transition flex items-center justify-between
-                        ${selectedVideo === vid.id 
-                            ? 'bg-blue-900/30 border-blue-500 ring-1 ring-blue-500' 
-                            : 'bg-gray-900 border-gray-700 hover:border-gray-600'}`}
-                    >
-                        <div className="flex items-center gap-3 overflow-hidden">
-                        <div className="w-10 h-10 shrink-0 bg-gray-800 rounded flex items-center justify-center">
-                            <span className="text-xs font-bold text-gray-500">VID</span>
-                        </div>
-                        <div className="min-w-0">
-                            <p className="text-white font-medium text-sm truncate">{vid.metadata.title || vid.filename}</p>
-                            <div className="flex items-center gap-2">
-                                <p className="text-xs text-gray-500">{vid.duration}</p>
-                                {vid.channelName && (
-                                    <span className="text-[10px] bg-blue-900/50 text-blue-300 px-1.5 rounded border border-blue-800">
-                                        {vid.channelName}
-                                    </span>
-                                )}
-                            </div>
-                        </div>
-                        </div>
-                        {selectedVideo === vid.id && <Check className="w-5 h-5 text-blue-500 shrink-0" />}
+                    <h3 className="text-lg font-medium text-white mb-4 flex items-center justify-between">
+                        1. Chọn Kênh Đích (Bắt buộc)
+                        <span className="text-xs text-blue-400 bg-blue-900/30 px-2 py-1 rounded">Chỉ chọn 1 kênh</span>
+                    </h3>
+                    <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2">
+                        {channels.map(ch => {
+                            const isSelected = selectedChannels.includes(ch.id);
+                            return (
+                                <div 
+                                    key={ch.id}
+                                    onClick={() => handleManualToggleChannel(ch.id!)}
+                                    className={`flex items-center justify-between p-3 rounded-lg border transition cursor-pointer
+                                    ${isSelected
+                                        ? 'bg-blue-900/20 border-blue-600 ring-1 ring-blue-600' 
+                                        : 'bg-gray-900 border-gray-700 hover:bg-gray-800'}`}
+                                >
+                                    <div className="flex items-center gap-3">
+                                        {/* Radio Circle UI */}
+                                        <div className={`w-5 h-5 rounded-full border flex items-center justify-center ${isSelected ? 'border-blue-500' : 'border-gray-500'}`}>
+                                            {isSelected && <div className="w-3 h-3 bg-blue-500 rounded-full" />}
+                                        </div>
+                                        <img src={ch.avatarUrl} className="w-8 h-8 rounded-full" alt="" />
+                                        <span className="text-white font-medium">{ch.name}</span>
+                                    </div>
+                                    
+                                    {isSelected && <CheckCircle2 className="w-5 h-5 text-blue-500" />}
+                                </div>
+                            );
+                        })}
                     </div>
-                    ))}
-                </div>
                 </div>
 
-                {/* 2. Channel Selector */}
+                {/* 1. Video Selector */}
                 <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
-                <h3 className="text-lg font-medium text-white mb-4">2. Chọn Kênh Đích</h3>
-                <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2">
-                    {channels.map(ch => {
-                        const isLocked = currentVideo?.channelId && currentVideo.channelId !== ch.id;
-                        return (
-                            <label 
-                                key={ch.id}
-                                className={`flex items-center justify-between p-3 rounded-lg border transition
-                                ${isLocked ? 'opacity-40 cursor-not-allowed bg-gray-900 border-gray-800' : 'cursor-pointer'}
-                                ${selectedChannels.includes(ch.id!) && !isLocked
-                                    ? 'bg-green-900/20 border-green-600' 
-                                    : (!isLocked ? 'bg-gray-900 border-gray-700 hover:bg-gray-800' : '')}`}
-                            >
-                                <div className="flex items-center gap-3">
-                                <input 
-                                    type="checkbox" 
-                                    className="hidden" 
-                                    checked={selectedChannels.includes(ch.id!)}
-                                    onChange={() => handleManualToggleChannel(ch.id!)}
-                                    disabled={!!isLocked}
-                                />
-                                <img src={ch.avatarUrl} className="w-8 h-8 rounded-full" alt="" />
-                                <span className="text-white font-medium">{ch.name}</span>
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-medium text-white">2. Chọn Video ({manualVideos.length})</h3>
+                        {isLoadingVideos && <RefreshCw className="w-4 h-4 animate-spin text-blue-400" />}
+                    </div>
+                    
+                    {selectedChannels.length === 0 ? (
+                        <div className="p-8 text-center text-gray-500 border border-dashed border-gray-700 rounded-lg">
+                            <Video className="w-10 h-10 mx-auto mb-2 opacity-50"/>
+                            Vui lòng chọn Kênh ở trên để tải danh sách video của kênh đó.
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[400px] overflow-y-auto pr-2">
+                            {manualVideos.length === 0 && !isLoadingVideos && <p className="text-gray-500 text-sm">Không tìm thấy video Draft nào cho kênh này.</p>}
+                            {manualVideos.map(vid => (
+                                <div 
+                                    key={vid.id}
+                                    onClick={() => setSelectedVideo(vid.id!)}
+                                    className={`p-4 rounded-lg border cursor-pointer transition flex items-center justify-between
+                                    ${selectedVideo === vid.id 
+                                        ? 'bg-blue-900/30 border-blue-500 ring-1 ring-blue-500' 
+                                        : 'bg-gray-900 border-gray-700 hover:border-gray-600'}`}
+                                >
+                                    <div className="flex items-center gap-3 overflow-hidden">
+                                        <div className="w-10 h-10 shrink-0 bg-gray-800 rounded flex items-center justify-center">
+                                            <span className="text-xs font-bold text-gray-500">VID</span>
+                                        </div>
+                                        <div className="min-w-0">
+                                            <p className="text-white font-medium text-sm truncate">{vid.metadata.title || vid.filename}</p>
+                                            <div className="flex items-center gap-2 mt-1">
+                                                {vid.channelName ? (
+                                                    <span className="text-[10px] bg-blue-900/50 text-blue-300 px-1.5 rounded border border-blue-800 truncate max-w-[100px]">
+                                                        {vid.channelName}
+                                                    </span>
+                                                ) : (
+                                                    <span className="text-[10px] bg-gray-700 text-gray-400 px-1.5 rounded">Orphan</span>
+                                                )}
+                                                <span className="text-xs text-gray-500">• {vid.duration}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {selectedVideo === vid.id && <Check className="w-5 h-5 text-blue-500 shrink-0" />}
                                 </div>
-                                
-                                <div className={`w-5 h-5 rounded-full border flex items-center justify-center
-                                ${selectedChannels.includes(ch.id!) ? 'bg-green-500 border-transparent' : 'border-gray-600'}`}>
-                                {selectedChannels.includes(ch.id!) && <Check className="w-3 h-3 text-white" />}
-                                {isLocked && <Lock className="w-3 h-3 text-gray-500" />}
-                                </div>
-                            </label>
-                        );
-                    })}
-                </div>
+                            ))}
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -515,7 +625,11 @@ const Scheduler: React.FC = () => {
                                        <p className="font-bold text-white text-sm">{t.name}</p>
                                        <p className="text-xs text-gray-500">Chu kỳ: {t.cycleDays} ngày • {t.timeSlots.length} khung giờ</p>
                                    </div>
-                                   <button onClick={(e) => { e.stopPropagation(); handleDeleteTemplate(t.id); }} className="text-gray-600 hover:text-red-400 p-1">
+                                   <button 
+                                      onClick={(e) => handleDeleteTemplate(e, t.id)} 
+                                      className="p-2 text-gray-500 hover:text-red-500 hover:bg-red-900/30 rounded transition"
+                                      title="Xóa lịch mẫu"
+                                   >
                                        <Trash2 className="w-4 h-4" />
                                    </button>
                                </div>
@@ -533,9 +647,9 @@ const Scheduler: React.FC = () => {
                   </h3>
                   <div className="space-y-2 overflow-y-auto flex-1 pr-2">
                       {channels.map(ch => {
-                          const draftCount = getDraftVideosForChannel(ch.id).length;
+                          // USE DRAFT COUNTS HERE
+                          const draftCount = getDraftCount(ch.id);
                           const selected = autoSelectedChannels.includes(ch.id);
-                          // Check if this channel is bound to current selected template
                           const isBoundToCurrentTemplate = currentTemplateId && ch.currentTemplateId === currentTemplateId;
 
                           return (
@@ -554,7 +668,7 @@ const Scheduler: React.FC = () => {
                                               {ch.name}
                                               {isBoundToCurrentTemplate && <span className="text-[10px] bg-purple-900 text-purple-300 px-1 rounded">Linked</span>}
                                           </p>
-                                          <p className="text-xs text-gray-400">{draftCount} video sẵn sàng (DRAFT)</p>
+                                          <p className="text-xs text-gray-400">{draftCount.toLocaleString()} video sẵn sàng (DRAFT)</p>
                                       </div>
                                   </div>
                               </div>

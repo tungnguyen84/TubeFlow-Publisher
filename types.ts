@@ -37,6 +37,11 @@ export interface Channel {
   tags: string[];
   youtubeId: string; 
   
+  // Stats - New Fields
+  totalViews?: number;
+  videoCount?: number;
+  lastStatsSync?: string; // Thời điểm cập nhật số liệu view/sub cuối cùng
+
   // Auth Data
   accessToken?: string; 
   refreshToken?: string; 
@@ -97,6 +102,7 @@ export interface Job {
   videoId: string;
   channelId: string;
   videoTitle: string; 
+  videoFilename?: string; // NEW: Để auto match file
   channelName: string; 
   status: 'QUEUED' | 'UPLOADING' | 'COMPLETED' | 'FAILED' | 'RETRYING' | 'PAUSED' | 'QUOTA_LIMIT';
   progress: number;
@@ -115,6 +121,7 @@ export interface Job {
       title?: string;
       description?: string;
       tags?: string[];
+      defaultFolderPath?: string; // NEW: Để match folder
   };
 
   videoMetadata?: VideoMetadata;
@@ -139,7 +146,8 @@ export enum View {
   SETTINGS = 'SETTINGS',
   PROXIES = 'PROXIES',
   ANALYTICS = 'ANALYTICS',
-  SYSTEM_LOGS = 'SYSTEM_LOGS'
+  SYSTEM_LOGS = 'SYSTEM_LOGS',
+  ADVANCED_TOOLS = 'ADVANCED_TOOLS' // NEW: Added
 }
 
 // --- NEW TYPES FOR AUTO SCHEDULER ---
@@ -185,4 +193,38 @@ export interface ChannelAnalytics {
     subscriberCount: number;
     totalViews: number;
     videoCount: number;
+}
+
+export interface YouTubeVideoStats {
+    id: string;
+    title: string;
+    publishedAt: string;
+    thumbnailUrl: string;
+    viewCount: number;
+    likeCount: number;
+    commentCount: number;
+}
+
+// --- NEW TYPES FOR ADVANCED TOOLS ---
+export interface UnifiedComment {
+    id: string;
+    authorDisplayName: string;
+    authorProfileImageUrl: string;
+    textDisplay: string;
+    publishedAt: string;
+    videoTitle: string;
+    channelId: string;
+    channelName: string; // Mapped locally
+    canReply: boolean;
+}
+
+export interface CompetitorVideo {
+    id: string;
+    title: string;
+    publishedAt: string;
+    thumbnailUrl: string;
+    viewCount: number;
+    channelTitle: string;
+    daysAgo: number;
+    velocity?: number; // Views per day
 }

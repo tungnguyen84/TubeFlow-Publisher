@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { Job } from '../types';
 import { fetchErrorLogs, updateJobStatus, deleteJob } from '../services/supabaseService';
@@ -135,7 +136,10 @@ const SystemLogs: React.FC = () => {
                             <tbody className="divide-y divide-gray-800">
                                 {logs.map(job => (
                                     <tr key={job.id} className="hover:bg-gray-800 transition">
-                                        <td className="p-4 text-gray-400 font-mono text-xs">{job.scheduledTime}</td>
+                                        <td className="p-4 text-gray-400 font-mono text-xs">
+                                            {/* Format ISO to Local String */}
+                                            {new Date(job.scheduledTime).toLocaleString('vi-VN')}
+                                        </td>
                                         <td className="p-4 font-medium text-blue-300">{job.channelName}</td>
                                         <td className="p-4 text-white truncate max-w-[200px]" title={job.videoTitle}>{job.videoTitle}</td>
                                         <td className="p-4">

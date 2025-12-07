@@ -50,80 +50,103 @@ export const saveProxy = async (proxy: Partial<ProxyItem>) => {
         status: 'UNKNOWN',
         location: proxy.location
     });
-    if (error) throw error;
+    if (error) throw new Error(error.message);
 };
 
 export const deleteProxy = async (id: string) => {
     const { error } = await supabaseInstance.from('proxies').delete().eq('id', id);
-    if (error) throw error;
+    if (error) throw new Error(error.message);
 };
 
 // --- CHANNELS ---
 export const fetchChannels = async (): Promise<Channel[]> => {
   // 1. Try fetching with proxies join
-  // NOTE: This might fail if the user hasn't run the migration to create 'proxies' table/relation.
   let { data, error } = await supabaseInstance.from('channels').select(`
     *,
     proxies (ip, port, protocol)
   `).order('created_at', { ascending: false });
   
-  // 2. Fallback: If relation 'proxies' not found or error, fetch without join
   if (error) {
-    console.warn("Lỗi lấy channels kèm proxy (có thể chưa update DB), đang thử lại chế độ cơ bản...", error);
+    console.warn("Lỗi lấy channels kèm proxy (thử lại basic):", error.message || error);
     const retry = await supabaseInstance.from('channels').select('*').order('created_at', { ascending: false });
     data = retry.data;
     error = retry.error;
   }
 
   if (error) {
-    console.error("Lỗi lấy channels (Fatal):", JSON.stringify(error));
+    console.error("Lỗi lấy channels (Fatal):", error.message || error);
     return [];
   }
   
-  return (data || []).map((row: any) => ({
-    id: row.id,
-    name: row.name,
-    avatarUrl: row.avatar_url || 'https://ui-avatars.com/api/?name=' + row.name,
-    subscriberCount: row.subscriber_count,
-    groupId: row.group_id,
-    status: row.status,
-    lastSync: new Date(row.last_sync).toLocaleString('vi-VN'),
-    tags: row.tags || [],
-    youtubeId: row.youtube_id,
-    
-    // Auth
-    accessToken: row.access_token,
-    refreshToken: row.refresh_token,
-    tokenExpiresAt: row.token_expires_at ? new Date(row.token_expires_at).getTime() : 0,
-    
-    // Custom Config
-    clientId: row.client_id,
-    clientSecret: row.client_secret,
-    
-    // Defaults
-    defaultTitle: row.default_title,
-    defaultDescription: row.default_description,
-    defaultTags: row.default_tags || [],
-    defaultFolderPath: row.default_folder_path,
-    
-    // Schedule Binding
-    currentTemplateId: row.current_template_id,
+  return (data || []).map((row: any) => {
+    // Handle proxies (could be array or object depending on join)
+    let proxyIP = undefined;
+    if (row.proxies) {
+        if (Array.isArray(row.proxies)) {
+             if (row.proxies.length > 0) {
+                 proxyIP = `${row.proxies[0].protocol}://${row.proxies[0].ip}:${row.proxies[0].port}`;
+             }
+        } else {
+             proxyIP = `${row.proxies.protocol}://${row.proxies.ip}:${row.proxies.port}`;
+        }
+    }
 
-    // Proxy Binding
-    proxyId: row.proxy_id,
-    proxyIP: row.proxies ? `${row.proxies.protocol}://${row.proxies.ip}:${row.proxies.port}` : undefined
-  }));
+    return {
+        id: row.id,
+        name: row.name,
+        avatarUrl: row.avatar_url || 'https://ui-avatars.com/api/?name=' + row.name,
+        subscriberCount: row.subscriber_count,
+        groupId: row.group_id,
+        status: row.status,
+        lastSync: new Date(row.last_sync).toLocaleString('vi-VN'),
+        tags: row.tags || [],
+        youtubeId: row.youtube_id,
+        
+        // Stats Mapping
+        totalViews: row.total_views || 0,
+        videoCount: row.video_count || 0,
+        lastStatsSync: row.last_stats_sync,
+
+        // Auth
+        accessToken: row.access_token,
+        refreshToken: row.refresh_token,
+        tokenExpiresAt: row.token_expires_at ? new Date(row.token_expires_at).getTime() : 0,
+        
+        // Custom Config
+        clientId: row.client_id,
+        clientSecret: row.client_secret,
+        
+        // Defaults
+        defaultTitle: row.default_title,
+        defaultDescription: row.default_description,
+        defaultTags: row.default_tags || [],
+        defaultFolderPath: row.default_folder_path,
+        
+        // Schedule Binding
+        currentTemplateId: row.current_template_id,
+
+        // Proxy Binding
+        proxyId: row.proxy_id,
+        proxyIP: proxyIP
+    };
+  });
 };
 
 export const addChannel = async (channel: Partial<Channel>) => {
+  // CRITICAL FIX: Use channel.youtubeId explicitly.
+  // If youtubeId is missing, throw error instead of using random string.
+  if (!channel.youtubeId) {
+      console.error("Missing YouTube ID in addChannel payload:", channel);
+      throw new Error("Lỗi hệ thống: YouTube ID bị thiếu khi lưu kênh.");
+  }
+
   const { error } = await supabaseInstance.from('channels').insert({
-    youtube_id: channel.id || Math.random().toString(36),
+    youtube_id: channel.youtubeId, 
     name: channel.name,
     avatar_url: channel.avatarUrl,
     subscriber_count: channel.subscriberCount || 0,
     status: 'ACTIVE',
     tags: channel.tags || [],
-    // Lưu các cấu hình custom
     client_id: channel.clientId,
     client_secret: channel.clientSecret,
     default_title: channel.defaultTitle,
@@ -132,14 +155,11 @@ export const addChannel = async (channel: Partial<Channel>) => {
     default_folder_path: channel.defaultFolderPath,
     proxy_id: channel.proxyId
   });
-  if (error) throw error;
+  if (error) throw new Error(error.message);
 };
 
-// Hàm cập nhật cấu hình kênh
 export const updateChannelConfig = async (id: string, config: Partial<Channel>) => {
     const updateData: any = {};
-    
-    // Chỉ update các trường có giá trị
     if (config.clientId !== undefined) updateData.client_id = config.clientId;
     if (config.clientSecret !== undefined) updateData.client_secret = config.clientSecret;
     if (config.defaultTitle !== undefined) updateData.default_title = config.defaultTitle;
@@ -149,26 +169,20 @@ export const updateChannelConfig = async (id: string, config: Partial<Channel>) 
     if (config.proxyId !== undefined) updateData.proxy_id = config.proxyId;
 
     const { error } = await supabaseInstance.from('channels').update(updateData).eq('id', id);
-    if (error) throw error;
+    if (error) throw new Error(error.message);
 };
 
 export const updateChannelCredentials = async (id: string, accessToken: string, refreshToken: string, expiresInSeconds: number) => {
     const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
-    
     const updateData: any = {
         access_token: accessToken,
         token_expires_at: expiresAt.toISOString(),
         last_sync: new Date().toISOString(),
-        status: 'ACTIVE' // Reset status về Active khi reconnect
+        status: 'ACTIVE'
     };
-
-    if (refreshToken) {
-        updateData.refresh_token = refreshToken;
-    }
-
+    if (refreshToken) updateData.refresh_token = refreshToken;
     const { error } = await supabaseInstance.from('channels').update(updateData).eq('id', id);
-
-    if (error) throw error;
+    if (error) throw new Error(error.message);
 };
 
 export const updateChannelAccessTokenOnly = async (id: string, accessToken: string, expiresInSeconds: number) => {
@@ -177,7 +191,26 @@ export const updateChannelAccessTokenOnly = async (id: string, accessToken: stri
         access_token: accessToken,
         token_expires_at: expiresAt.toISOString(),
     }).eq('id', id);
-    if (error) console.error("Lỗi update token mới:", error);
+    if (error) console.error("Lỗi update token mới:", error.message || error);
+}
+
+// NEW: Update Channel Analytics Stats
+export const updateChannelStats = async (id: string, stats: { subscriberCount?: number, totalViews?: number, videoCount?: number }) => {
+    const updateData: any = {
+        last_stats_sync: new Date().toISOString()
+    };
+    if (stats.subscriberCount !== undefined) updateData.subscriber_count = stats.subscriberCount;
+    if (stats.totalViews !== undefined) updateData.total_views = stats.totalViews;
+    if (stats.videoCount !== undefined) updateData.video_count = stats.videoCount;
+
+    const { error } = await supabaseInstance.from('channels').update(updateData).eq('id', id);
+    if (error) {
+         // Specific hint for the missing column error
+         if (error.message.includes("Could not find the 'last_stats_sync' column")) {
+             throw new Error("Lỗi DB: Bảng 'channels' thiếu cột mới. Hãy vào Settings > Database, Copy SQL và chạy lại trong Supabase.");
+         }
+         throw new Error(error.message);
+    }
 }
 
 export const updateChannelTemplate = async (channelId: string, templateId: string) => {
@@ -186,21 +219,86 @@ export const updateChannelTemplate = async (channelId: string, templateId: strin
 
 export const deleteChannel = async (id: string) => {
   const { error } = await supabaseInstance.from('channels').delete().eq('id', id);
-  if (error) throw error;
+  if (error) throw new Error(error.message);
 };
 
 // --- VIDEOS ---
+// NEW: Fetch Count of Draft Videos per Channel (Optimized for large DB)
+export const fetchDraftCounts = async (): Promise<Record<string, number>> => {
+    // Strategy 1: Try fetching from a View (Best Performance)
+    // CREATE VIEW view_channel_draft_counts AS SELECT channel_id, COUNT(*) as count FROM videos WHERE status = 'DRAFT' GROUP BY channel_id;
+    try {
+        const { data, error } = await supabaseInstance.from('view_channel_draft_counts').select('*');
+        if (!error && data) {
+            const counts: Record<string, number> = {};
+            data.forEach((row: any) => {
+                counts[row.channel_id] = row.count;
+            });
+            return counts;
+        }
+    } catch (e) {
+        // Fallback if view doesn't exist
+    }
+
+    // Strategy 2: Client-side Aggregation with Pagination (Robust fallback)
+    // This loops until all draft video UUIDs are fetched.
+    const counts: Record<string, number> = {};
+    const pageSize = 1000;
+    let from = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+        const { data, error } = await supabaseInstance
+            .from('videos')
+            .select('channel_id')
+            .eq('status', 'DRAFT')
+            .range(from, from + pageSize - 1);
+
+        if (error) {
+            console.error("Error fetching draft counts (chunked):", error.message || error);
+            break;
+        }
+
+        if (!data || data.length === 0) {
+            hasMore = false;
+            break;
+        }
+
+        data.forEach((row: any) => {
+            if (row.channel_id) {
+                counts[row.channel_id] = (counts[row.channel_id] || 0) + 1;
+            }
+        });
+
+        // If we got fewer rows than requested, we are done
+        if (data.length < pageSize) {
+            hasMore = false;
+        } else {
+            from += pageSize;
+        }
+    }
+
+    return counts;
+};
+
 export const fetchVideos = async (
-    filters: { channelId?: string, status?: string, folder?: string, limit?: number } = {}
+    filters: { channelId?: string, status?: string, folder?: string, limit?: number, sortBy?: string, sortOrder?: 'asc' | 'desc', isOrphan?: boolean } = {}
 ): Promise<VideoItem[]> => {
   let query = supabaseInstance
     .from('videos')
-    .select(`*, channels(name)`)
-    .order('created_at', { ascending: false });
+    .select(`*, channels(name)`);
 
-  if (filters.channelId) {
+  // SORTING LOGIC
+  const sortCol = filters.sortBy || 'created_at';
+  const sortAsc = filters.sortOrder === 'asc';
+  query = query.order(sortCol, { ascending: sortAsc });
+
+  if (filters.isOrphan) {
+      query = query.is('channel_id', null);
+  } else if (filters.channelId) {
       query = query.eq('channel_id', filters.channelId);
   }
+
   if (filters.status) {
       query = query.eq('status', filters.status);
   }
@@ -208,47 +306,71 @@ export const fetchVideos = async (
       query = query.ilike('file_path', `%${filters.folder}%`);
   }
   
-  // Logic giới hạn số lượng bản ghi
-  if (filters.limit && filters.limit > 0) {
-      query = query.limit(filters.limit);
-  }
-    
-  const { data, error } = await query;
-  if (error) throw error;
-  
-  return data.map((row: any) => ({
-    id: row.id,
-    filename: row.filename,
-    filePath: row.file_path,
-    duration: row.duration_seconds ? `${Math.floor(row.duration_seconds/60)}:${row.duration_seconds%60}` : 'Unknown',
-    resolution: row.resolution || 'Unknown',
-    status: row.status,
-    // Binding Info
-    channelId: row.channel_id,
-    channelName: row.channels?.name,
-    youtubeVideoId: row.youtube_video_id,
+  if (filters.limit && filters.limit > 1000) {
+      let allData: any[] = [];
+      const pageSize = 1000;
+      let from = 0;
+      let remaining = filters.limit;
+      
+      while (remaining > 0) {
+          const fetchSize = Math.min(pageSize, remaining);
+          const { data, error } = await query.range(from, from + fetchSize - 1);
+          if (error) throw new Error(error.message);
+          if (!data || data.length === 0) break;
+          
+          allData = [...allData, ...data];
+          if (data.length < fetchSize) break; 
+          
+          from += fetchSize;
+          remaining -= fetchSize;
+      }
+      return mapVideoData(allData);
 
-    metadata: {
-      title: row.title_template || '',
-      description: row.desc_template || '',
-      tags: row.tags || [],
-      visibility: 'private'
-    }
-  }));
+  } else if (filters.limit && filters.limit > 0) {
+      query = query.limit(filters.limit);
+      const { data, error } = await query;
+      if (error) throw new Error(error.message);
+      return mapVideoData(data);
+  } else {
+      const { data, error } = await query;
+      if (error) throw new Error(error.message);
+      return mapVideoData(data);
+  }
 };
 
+const mapVideoData = (data: any[]): VideoItem[] => {
+    return data.map((row: any) => ({
+        id: row.id,
+        filename: row.filename,
+        filePath: row.file_path,
+        duration: row.duration_seconds ? `${Math.floor(row.duration_seconds/60)}:${row.duration_seconds%60}` : 'Unknown',
+        resolution: row.resolution || 'Unknown',
+        status: row.status,
+        channelId: row.channel_id,
+        channelName: row.channels?.name,
+        youtubeVideoId: row.youtube_video_id,
+        targetChannelIds: [],
+        metadata: {
+        title: row.title_template || '',
+        description: row.desc_template || '',
+        tags: row.tags || [],
+        visibility: 'private'
+        }
+    }));
+}
+
 export const saveVideo = async (video: Partial<VideoItem>): Promise<string> => {
-  // Kiểm tra trùng lặp theo filename. Nếu có channelId, check trùng filename TRONG channel đó
+  // Check existence properly: match Filename AND Channel (or both null/orphan)
   let query = supabaseInstance.from('videos').select('id').eq('filename', video.filename);
+  
   if (video.channelId) {
       query = query.eq('channel_id', video.channelId);
+  } else {
+      query = query.is('channel_id', null);
   }
   
   const { data: existing } = await query.maybeSingle();
-  
-  if (existing) {
-    return existing.id; 
-  }
+  if (existing) return existing.id; 
 
   const { data, error } = await supabaseInstance.from('videos').insert({
     filename: video.filename,
@@ -258,24 +380,36 @@ export const saveVideo = async (video: Partial<VideoItem>): Promise<string> => {
     title_template: video.metadata?.title || video.filename,
     desc_template: video.metadata?.description,
     tags: video.metadata?.tags || [],
-    channel_id: video.channelId // Lưu channel ownership
+    channel_id: video.channelId || null
   }).select('id').single();
 
-  if (error) throw error;
+  if (error) throw new Error(error.message);
   return data.id;
 };
 
-// Hàm mới: Quét file từ folder (thực chất là nhận list file từ client) và sync vào DB cho Channel
-export const syncVideosForChannel = async (channelId: string, folderPath: string, files: {name: string}[]) => {
-    // 1. Chuẩn bị đường dẫn cơ sở.
-    // Lưu ý: folderPath là chuỗi người dùng nhập (C:\Videos\...)
-    const cleanFolderPath = folderPath.endsWith('\\') || folderPath.endsWith('/') ? folderPath : folderPath + '\\';
+export const deleteVideos = async (ids: string[]) => {
+    if (!ids || ids.length === 0) return;
+    const { error } = await supabaseInstance.from('videos').delete().in('id', ids);
+    if (error) throw new Error(error.message);
+}
 
+// NEW: Bulk Update Videos (For Bulk Editor)
+export const bulkUpdateVideos = async (ids: string[], updates: any) => {
+    if (!ids || ids.length === 0) return;
+    
+    const { error } = await supabaseInstance
+        .from('videos')
+        .update(updates)
+        .in('id', ids);
+        
+    if (error) throw new Error("Bulk update failed: " + error.message);
+}
+
+export const syncVideosForChannel = async (channelId: string, folderPath: string, files: {name: string}[]) => {
+    const cleanFolderPath = folderPath.endsWith('\\') || folderPath.endsWith('/') ? folderPath : folderPath + '\\';
     for (const file of files) {
         const fullPath = cleanFolderPath + file.name;
         const fileNameNoExt = file.name.replace(/\.[^/.]+$/, "");
-        
-        // 2. Upsert Video: Nếu video tên đó đã có ở kênh này -> Update path. Nếu chưa -> Insert
         const { data: existing } = await supabaseInstance
             .from('videos')
             .select('id')
@@ -284,10 +418,8 @@ export const syncVideosForChannel = async (channelId: string, folderPath: string
             .maybeSingle();
 
         if (existing) {
-            // Update path nếu cần
             await supabaseInstance.from('videos').update({ file_path: fullPath }).eq('id', existing.id);
         } else {
-            // Insert mới
             await supabaseInstance.from('videos').insert({
                 filename: file.name,
                 file_path: fullPath,
@@ -301,13 +433,18 @@ export const syncVideosForChannel = async (channelId: string, folderPath: string
     }
 }
 
-export const updateVideoMetadata = async (id: string, metadata: any) => {
-  const { error } = await supabaseInstance.from('videos').update({
+export const updateVideoMetadata = async (id: string, metadata: any, channelId?: string) => {
+  const updateData: any = {
     title_template: metadata.title,
     desc_template: metadata.description,
     tags: metadata.tags
-  }).eq('id', id);
-  if (error) throw error;
+  };
+  if (channelId !== undefined) {
+      updateData.channel_id = channelId;
+  }
+
+  const { error } = await supabaseInstance.from('videos').update(updateData).eq('id', id);
+  if (error) throw new Error(error.message);
 };
 
 export const updateVideoYoutubeId = async (id: string, youtubeVideoId: string) => {
@@ -315,7 +452,7 @@ export const updateVideoYoutubeId = async (id: string, youtubeVideoId: string) =
         youtube_video_id: youtubeVideoId,
         status: 'PUBLISHED'
     }).eq('id', id);
-    if (error) throw error;
+    if (error) throw new Error(error.message);
 }
 
 // --- JOBS ---
@@ -326,15 +463,15 @@ export const createJob = async (job: Partial<Job>) => {
     scheduled_time: job.scheduledTime,
     status: 'QUEUED'
   });
-  if (error) throw error;
+  if (error) throw new Error(error.message);
 };
 
-// Hàm fetchErrorLogs: Chỉ lấy những job bị lỗi hoặc limit, không giới hạn ngày (hoặc giới hạn rộng)
 export const fetchErrorLogs = async (): Promise<Job[]> => {
+    // FIX: ADD video_id, channel_id to select
     const { data, error } = await supabaseInstance
         .from('upload_jobs')
         .select(`
-            id, status, scheduled_time, retries, error_log, created_at,
+            id, video_id, channel_id, status, scheduled_time, retries, error_log, created_at,
             videos (title_template, desc_template, tags),
             channels (name, access_token, refresh_token)
         `)
@@ -342,7 +479,7 @@ export const fetchErrorLogs = async (): Promise<Job[]> => {
         .order('scheduled_time', { ascending: false })
         .limit(100);
 
-    if (error) throw error;
+    if (error) throw new Error(error.message);
 
     return data.map((row: any) => ({
         id: row.id,
@@ -352,77 +489,76 @@ export const fetchErrorLogs = async (): Promise<Job[]> => {
         channelName: row.channels?.name || 'Kênh đã xóa',
         status: row.status,
         progress: 0,
-        scheduledTime: new Date(row.scheduled_time).toLocaleString('vi-VN'),
+        // FIX: Return raw ISO string for correct logic comparison
+        scheduledTime: row.scheduled_time, 
         retries: row.retries || 0,
         errorMessage: row.error_log,
-        accessToken: row.channels?.access_token, // Just to check status
+        accessToken: row.channels?.access_token, 
         refreshToken: row.channels?.refresh_token
     }));
 }
 
-export const fetchJobs = async (daysLimit: number = 3, channelId: string | null = null): Promise<Job[]> => {
+export const fetchJobs = async (daysLimit: number = 3, channelId: string | null = null, status: string | null = null): Promise<Job[]> => {
   const now = new Date();
-  
-  // Start Date: Now - daysLimit
   const startDate = new Date(now);
   startDate.setDate(startDate.getDate() - daysLimit);
   const isoStartDate = startDate.toISOString();
-
-  // End Date: Now + daysLimit (Chỉ lấy job trong khoảng cửa sổ thời gian này, tránh load job quá xa trong tương lai)
   const endDate = new Date(now);
   endDate.setDate(endDate.getDate() + daysLimit);
   const isoEndDate = endDate.toISOString();
 
+  // FIX: ADD video_id, channel_id to select
   let query = supabaseInstance
     .from('upload_jobs')
     .select(`
-      id, status, scheduled_time, retries, error_log, created_at,
-      videos (title_template, desc_template, tags),
-      channels (name, access_token, refresh_token, token_expires_at, client_id, client_secret, default_title, default_description, default_tags)
+      id, video_id, channel_id, status, scheduled_time, retries, error_log, created_at,
+      videos (filename, title_template, desc_template, tags),
+      channels (name, access_token, refresh_token, token_expires_at, client_id, client_secret, default_title, default_description, default_tags, default_folder_path)
     `)
     .gte('scheduled_time', isoStartDate)
-    .lte('scheduled_time', isoEndDate) // Filter Upper Bound
+    .lte('scheduled_time', isoEndDate)
     .order('scheduled_time', { ascending: true });
 
   if (channelId) {
       query = query.eq('channel_id', channelId);
   }
 
+  if (status) {
+      query = query.eq('status', status);
+  }
+
   const { data, error } = await query;
-  
-  if (error) throw error;
+  if (error) throw new Error(error.message);
   
   return data.map((row: any) => ({
     id: row.id,
     videoId: row.video_id,
     channelId: row.channel_id,
+    videoFilename: row.videos?.filename, // Map filename
     videoTitle: row.videos?.title_template || 'Video đã xóa',
     channelName: row.channels?.name || 'Kênh đã xóa',
     status: row.status,
     progress: row.status === 'COMPLETED' ? 100 : 0,
-    scheduledTime: new Date(row.scheduled_time).toLocaleString('vi-VN'),
+    // FIX: Return raw ISO string for correct logic comparison
+    scheduledTime: row.scheduled_time, 
     retries: row.retries || 0,
     errorMessage: row.error_log,
-
-    // Auth Data cho Upload
     accessToken: row.channels?.access_token,
     refreshToken: row.channels?.refresh_token,
     tokenExpiresAt: row.channels?.token_expires_at ? new Date(row.channels?.token_expires_at).getTime() : 0,
     clientId: row.channels?.client_id,
     clientSecret: row.channels?.client_secret,
-
-    // Metadata
     videoMetadata: {
         title: row.videos?.title_template || '',
         description: row.videos?.desc_template || '',
         tags: row.videos?.tags || [],
         visibility: 'public'
     },
-    // Channel Defaults
     channelDefaultMetadata: {
         title: row.channels?.default_title,
         description: row.channels?.default_description,
-        tags: row.channels?.default_tags || []
+        tags: row.channels?.default_tags || [],
+        defaultFolderPath: row.channels?.default_folder_path // NEW: Mapped
     }
   }));
 };
@@ -432,11 +568,51 @@ export const updateJobStatus = async (id: string, status: string, errorLog: stri
         status: status,
         error_log: errorLog
     }).eq('id', id);
-    if (error) console.error("Update Job Error", JSON.stringify(error));
+    if (error) console.error("Update Job Error", error.message || error);
 }
 
 export const deleteJob = async (id: string) => {
-    await supabaseInstance.from('upload_jobs').delete().eq('id', id);
+    const { error } = await supabaseInstance.from('upload_jobs').delete().eq('id', id);
+    if (error) throw new Error(error.message);
+}
+
+// NEW: Clear queued jobs with STRICT logic & LOGGING
+// Options:
+// 1. channelId provided -> delete matching channel
+// 2. status provided -> delete matching status
+// 3. No options -> DELETE ALL (Truncate)
+export const clearAllQueuedJobs = async (channelId?: string, status?: string): Promise<number | null> => {
+    console.log("🔥 [Delete Operation] Starting...", { channelId, status });
+    let query = supabaseInstance.from('upload_jobs').delete({ count: 'exact' });
+    
+    // Nếu cả channelId và status đều không có, nghĩa là "Xóa tất cả". 
+    // Supabase yêu cầu ít nhất 1 filter để delete nếu không tắt chế độ safe mode.
+    
+    if (channelId) {
+        console.log(" -> Filter by Channel:", channelId);
+        query = query.eq('channel_id', channelId);
+    }
+
+    if (status) {
+        console.log(" -> Filter by Status:", status);
+        query = query.eq('status', status);
+    }
+    
+    // Nếu không có filter (muốn xóa tất cả), dùng .not('id', 'is', null) để bypass safe mode
+    if (!channelId && !status) {
+         console.log(" -> No filters provided. DELETING ALL RECORDS in upload_jobs table.");
+         query = query.not('id', 'is', null);
+    }
+
+    const { error, count } = await query;
+    
+    if (error) {
+        console.error("❌ [Delete Error]:", error);
+        throw new Error(error.message || "Lỗi không xác định khi xóa Queue");
+    }
+    
+    console.log("✅ [Delete Success] Deleted count:", count);
+    return count;
 }
 
 // --- SCHEDULE TEMPLATES ---
@@ -447,13 +623,12 @@ export const saveScheduleTemplate = async (template: Partial<ScheduleTemplate>) 
         time_slots: template.timeSlots,
         created_at: new Date().toISOString()
     });
-    if (error) throw error;
+    if (error) throw new Error(error.message);
 }
 
 export const fetchScheduleTemplates = async (): Promise<ScheduleTemplate[]> => {
     const { data, error } = await supabaseInstance.from('schedule_templates').select('*').order('created_at', { ascending: false });
     if (error) return [];
-    
     return data.map((row: any) => ({
         id: row.id,
         name: row.name,
@@ -465,36 +640,27 @@ export const fetchScheduleTemplates = async (): Promise<ScheduleTemplate[]> => {
 
 export const deleteScheduleTemplate = async (id: string) => {
     const { error } = await supabaseInstance.from('schedule_templates').delete().eq('id', id);
-    if (error) throw error;
+    if (error) throw new Error(error.message);
 }
 
 // --- DASHBOARD STATS ---
 export const fetchDashboardStats = async (): Promise<DashboardStats> => {
-    // 1. Total Channels
     const { count: totalChannels } = await supabaseInstance.from('channels').select('*', { count: 'exact', head: true });
-
-    // 2. Uploads Today
     const today = new Date().toISOString().split('T')[0];
     const { count: uploadsToday } = await supabaseInstance
         .from('upload_jobs')
         .select('*', { count: 'exact', head: true })
         .eq('status', 'COMPLETED')
         .gte('scheduled_time', today);
-
-    // 3. Queued Jobs
     const { count: queuedJobs } = await supabaseInstance
         .from('upload_jobs')
         .select('*', { count: 'exact', head: true })
         .eq('status', 'QUEUED');
-        
-    // 4. Failed Jobs
     const { count: failedJobs } = await supabaseInstance
         .from('upload_jobs')
         .select('*', { count: 'exact', head: true })
         .in('status', ['FAILED', 'QUOTA_LIMIT']);
     
-    // 5. Recent Activity (Last 7 days completed jobs)
-    // Supabase group by query is tricky in JS client, so we do simple aggregation
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
     const { data: recentJobs } = await supabaseInstance
@@ -504,7 +670,6 @@ export const fetchDashboardStats = async (): Promise<DashboardStats> => {
         .gte('scheduled_time', sevenDaysAgo.toISOString());
     
     const activityMap: Record<string, number> = {};
-    // Init last 7 days with 0
     for(let i=0; i<7; i++) {
         const d = new Date();
         d.setDate(d.getDate() - i);
@@ -520,7 +685,7 @@ export const fetchDashboardStats = async (): Promise<DashboardStats> => {
     
     const recentActivity = Object.entries(activityMap)
         .map(([date, count]) => ({ date, count }))
-        .sort((a,b) => a.date.localeCompare(b.date)); // Sort asc for chart
+        .sort((a,b) => a.date.localeCompare(b.date));
 
     return {
         totalChannels: totalChannels || 0,
@@ -552,7 +717,7 @@ export const saveSystemSettings = async (youtubeApiKey: string, googleClientId: 
     google_client_id: googleClientId,
     updated_at: new Date().toISOString()
   });
-  if (error) throw error;
+  if (error) throw new Error(error.message);
 };
 
 export const generateSchemaSQL = (): string => {
@@ -600,36 +765,50 @@ create table if not exists public.channels (
   tags text[],
   last_sync timestamptz default now(),
   created_at timestamptz default now(),
-  -- Auth fields
   access_token text, 
   refresh_token text,
   token_expires_at timestamptz,
   client_id text,
   client_secret text,
-  -- Defaults
   default_title text,
   default_description text,
   default_tags text[],
   default_folder_path text,
-  -- NEW: Schedule Template Binding
   current_template_id uuid,
-  -- NEW: Proxy Binding
-  proxy_id uuid references public.proxies(id) on delete set null
+  proxy_id uuid references public.proxies(id) on delete set null,
+  
+  -- UPDATE ANALYTICS FIELDS (Added in recent update)
+  total_views bigint default 0,
+  video_count int default 0,
+  last_stats_sync timestamptz
 );
-
-alter table public.channels add column if not exists refresh_token text;
-alter table public.channels add column if not exists client_id text;
-alter table public.channels add column if not exists client_secret text;
-alter table public.channels add column if not exists default_title text;
-alter table public.channels add column if not exists default_description text;
-alter table public.channels add column if not exists default_tags text[];
-alter table public.channels add column if not exists default_folder_path text;
-alter table public.channels add column if not exists current_template_id uuid;
-alter table public.channels add column if not exists proxy_id uuid references public.proxies(id) on delete set null;
-
 alter table public.channels enable row level security;
 drop policy if exists "Enable all" on public.channels;
 create policy "Enable all" on public.channels for all using (true) with check (true);
+
+-- MIGRATION: ADD MISSING COLUMNS AUTOMATICALLY IF TABLE EXISTS
+DO $$
+BEGIN
+    -- Check and add 'last_stats_sync'
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'channels' AND column_name = 'last_stats_sync') THEN
+        ALTER TABLE public.channels ADD COLUMN last_stats_sync timestamptz;
+    END IF;
+
+    -- Check and add 'total_views'
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'channels' AND column_name = 'total_views') THEN
+        ALTER TABLE public.channels ADD COLUMN total_views bigint default 0;
+    END IF;
+
+    -- Check and add 'video_count'
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'channels' AND column_name = 'video_count') THEN
+        ALTER TABLE public.channels ADD COLUMN video_count int default 0;
+    END IF;
+
+    -- Check and add 'youtube_id' (Safety fix)
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'channels' AND column_name = 'youtube_id') THEN
+        ALTER TABLE public.channels ADD COLUMN youtube_id text;
+    END IF;
+END $$;
 
 -- 5. Table: Videos
 create table if not exists public.videos (
@@ -644,15 +823,9 @@ create table if not exists public.videos (
   tags text[],
   created_at timestamptz default now(),
   channel_id uuid references public.channels(id) on delete set null,
-  -- Analytics & Tracking
   youtube_video_id text,
   ab_test_config jsonb
 );
-
-alter table public.videos add column if not exists channel_id uuid references public.channels(id) on delete set null;
-alter table public.videos add column if not exists youtube_video_id text;
-alter table public.videos add column if not exists ab_test_config jsonb;
-
 alter table public.videos enable row level security;
 drop policy if exists "Enable all" on public.videos;
 create policy "Enable all" on public.videos for all using (true) with check (true);
@@ -683,5 +856,12 @@ create table if not exists public.schedule_templates (
 alter table public.schedule_templates enable row level security;
 drop policy if exists "Enable all" on public.schedule_templates;
 create policy "Enable all" on public.schedule_templates for all using (true) with check (true);
+
+-- 8. View: Channel Draft Counts (Optimization)
+create or replace view view_channel_draft_counts as
+select channel_id, count(*) as count
+from public.videos
+where status = 'DRAFT'
+group by channel_id;
 `;
 };

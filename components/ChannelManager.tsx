@@ -100,7 +100,7 @@ const ChannelManager: React.FC = () => {
     try {
       const info = await getChannelInfo(channelIdInput, apiKey);
       if (info) setFoundChannel(info);
-      else setErrorMsg("Không tìm thấy ID kênh.");
+      else setErrorMsg("Không tìm thấy kênh này. Hãy thử nhập Channel ID (UC...) hoặc Handle (@...).");
     } catch (err: any) {
       setErrorMsg(err.message);
     } finally {
@@ -154,8 +154,9 @@ const ChannelManager: React.FC = () => {
           alert("Đã cập nhật cấu hình kênh thành công!");
       } else {
           if (!foundChannel) return;
+          // IMPORTANT: Pass foundChannel.id as youtubeId
           await addChannel({
-            youtube_id: foundChannel.id,
+            youtubeId: foundChannel.id, 
             name: foundChannel.title,
             avatarUrl: foundChannel.thumbnailUrl,
             subscriberCount: foundChannel.subscriberCount,
@@ -166,8 +167,8 @@ const ChannelManager: React.FC = () => {
       setShowAddModal(false);
       resetForm();
       loadChannels();
-    } catch (error) {
-      alert("Lỗi lưu kênh: " + error);
+    } catch (error: any) {
+      alert("Lỗi lưu kênh: " + error.message);
     } finally {
       setIsLoading(false);
     }
@@ -470,7 +471,7 @@ const ChannelManager: React.FC = () => {
                         value={channelIdInput}
                         onChange={e => setChannelIdInput(e.target.value)}
                         className="flex-1 bg-gray-900 border border-gray-600 rounded p-2 text-white outline-none"
-                        placeholder="Nhập Channel ID (VD: UC...)"
+                        placeholder="Nhập Channel ID (UC...) hoặc Handle (@tenkenh)"
                     />
                     <button onClick={handleCheckChannel} disabled={isChecking} className="bg-gray-700 text-white px-3 rounded">
                         {isChecking ? <Loader2 className="animate-spin" /> : <Search />}
@@ -486,6 +487,7 @@ const ChannelManager: React.FC = () => {
                       <div>
                           <h4 className="font-bold text-white">{foundChannel.title}</h4>
                           <p className="text-xs text-gray-400">{foundChannel.subscriberCount.toLocaleString()} subs</p>
+                          <p className="text-[10px] text-gray-500 mt-0.5">ID: {foundChannel.id}</p>
                       </div>
                   </div>
               )}

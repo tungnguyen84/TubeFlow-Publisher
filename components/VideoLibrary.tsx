@@ -1,9 +1,9 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { VideoItem, VideoStatus, VideoMetadata, Channel } from '../types';
-import { FileVideo, Sparkles, Calendar, MoreVertical, Edit3, X, Save, Upload, RefreshCw, Link as LinkIcon, Filter, Search } from 'lucide-react';
+import { FileVideo, Sparkles, Calendar, MoreVertical, Edit3, X, Save, Upload, RefreshCw, Link as LinkIcon, Filter, Search, Trash2, CheckSquare, AlertTriangle, Info, ArrowDownAZ, ArrowUpZA } from 'lucide-react';
 import { generateVideoMetadata } from '../services/geminiService';
-import { fetchVideos, saveVideo, updateVideoMetadata, fetchChannels } from '../services/supabaseService';
+import { fetchVideos, saveVideo, updateVideoMetadata, fetchChannels, deleteVideos } from '../services/supabaseService';
 
 const VideoLibrary: React.FC = () => {
   const [videos, setVideos] = useState<VideoItem[]>([]);
@@ -12,26 +12,57 @@ const VideoLibrary: React.FC = () => {
   const [editingVideo, setEditingVideo] = useState<VideoItem | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   
-  // Filters
+  // Selection State
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isDeleting, setIsDeleting] = useState(false);
+  
+  // Filters & Sorting
   const [filterChannelId, setFilterChannelId] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [filterFolder, setFilterFolder] = useState('');
   const [limit, setLimit] = useState<number>(10);
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc'); // Sorting State
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [editForm, setEditForm] = useState<VideoMetadata>({
     title: '', description: '', tags: [], visibility: 'private'
   });
+  const [editChannelId, setEditChannelId] = useState<string>('');
+
+  // --- CUSTOM MODAL STATE ---
+  const [modal, setModal] = useState<{
+    isOpen: boolean;
+    type: 'CONFIRM' | 'ALERT' | 'INFO';
+    title: string;
+    message: string;
+    onConfirm?: () => void;
+  }>({ isOpen: false, type: 'INFO', title: '', message: '' });
+
+  const showConfirm = (title: string, message: string, onConfirm: () => void) => {
+    setModal({ isOpen: true, type: 'CONFIRM', title, message, onConfirm });
+  };
+
+  const showAlert = (title: string, message: string) => {
+    setModal({ isOpen: true, type: 'ALERT', title, message });
+  };
+
+  const closeModal = () => {
+    setModal(prev => ({ ...prev, isOpen: false }));
+  };
 
   const loadData = async () => {
     setIsLoading(true);
+    // Clear selection on reload
+    setSelectedIds([]);
     try {
       const [v, c] = await Promise.all([
           fetchVideos({ 
             channelId: filterChannelId, 
             status: filterStatus, 
             folder: filterFolder,
-            limit: limit
+            limit: limit,
+            sortBy: 'filename', // Sort by Name
+            sortOrder: sortOrder // asc or desc
           }),
           fetchChannels()
       ]);
@@ -46,7 +77,46 @@ const VideoLibrary: React.FC = () => {
 
   useEffect(() => {
     loadData();
-  }, [filterChannelId, filterStatus, limit]); // Reload when select filters change. Folder search manual trigger
+  }, [filterChannelId, filterStatus, limit, sortOrder]); // Reload when select filters or sort change.
+
+  // --- SELECTION LOGIC ---
+  const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (e.target.checked) {
+          // Select all currently visible videos
+          setSelectedIds(videos.map(v => v.id));
+      } else {
+          setSelectedIds([]);
+      }
+  };
+
+  const handleSelectRow = (id: string) => {
+      if (selectedIds.includes(id)) {
+          setSelectedIds(prev => prev.filter(x => x !== id));
+      } else {
+          setSelectedIds(prev => [...prev, id]);
+      }
+  };
+
+  const handleDeleteSelected = async () => {
+      if (selectedIds.length === 0) return;
+      
+      showConfirm(
+          "Xác nhận xóa", 
+          `Bạn có chắc muốn xóa ${selectedIds.length} video đã chọn khỏi hệ thống?`, 
+          async () => {
+              setIsDeleting(true);
+              try {
+                  await deleteVideos(selectedIds);
+                  showAlert("Thành công", `Đã xóa thành công ${selectedIds.length} video!`);
+                  await loadData();
+              } catch (e: any) {
+                  showAlert("Lỗi", "Lỗi xóa video: " + e.message);
+              } finally {
+                  setIsDeleting(false);
+              }
+          }
+      );
+  };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
@@ -54,11 +124,16 @@ const VideoLibrary: React.FC = () => {
     setIsLoading(true);
     const files = Array.from(e.target.files) as File[];
     
+    // Use the selected filter channel as default, or undefined (null)
+    const targetChannelId = filterChannelId || undefined;
+
     for (const file of files) {
       const videoEntry: Partial<VideoItem> = {
         filename: file.name,
         filePath: `C:\\Videos\\${file.name}`, 
         resolution: '1080p',
+        status: VideoStatus.DRAFT,
+        channelId: targetChannelId,
         metadata: {
           title: file.name.replace(/\.[^/.]+$/, ""),
           description: '',
@@ -72,16 +147,22 @@ const VideoLibrary: React.FC = () => {
     await loadData();
     setIsLoading(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
+    
+    if (!targetChannelId) {
+        showAlert("Lưu ý", "Video đã được import! Lưu ý: Bạn chưa chọn Kênh trong bộ lọc, nên video chưa được gán cho kênh nào. Hãy sửa và gán kênh để lên lịch.");
+    }
   };
 
   const openEditModal = (video: VideoItem) => {
     setEditingVideo(video);
     setEditForm({ ...video.metadata });
+    setEditChannelId(video.channelId || '');
   };
 
   const saveEdit = async () => {
     if (!editingVideo) return;
-    await updateVideoMetadata(editingVideo.id, editForm);
+    // Pass editChannelId to update
+    await updateVideoMetadata(editingVideo.id, editForm, editChannelId || undefined);
     setEditingVideo(null);
     loadData();
   };
@@ -102,14 +183,56 @@ const VideoLibrary: React.FC = () => {
       }
     } catch (e) {
       console.error(e);
-      alert("Lỗi khi gọi Gemini API.");
+      showAlert("Lỗi", "Lỗi khi gọi Gemini API.");
     } finally {
       setIsGenerating(null);
     }
   };
 
+  const toggleSort = () => {
+      setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+  }
+
   return (
     <div className="space-y-6 relative">
+      {/* --- CUSTOM MODAL --- */}
+      {modal.isOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+              <div className="bg-gray-900 rounded-2xl border border-gray-700 w-full max-w-md shadow-2xl scale-100 transform transition-all">
+                  <div className="p-6">
+                      <div className="flex items-start gap-4">
+                          <div className={`p-3 rounded-full shrink-0 ${modal.type === 'CONFIRM' ? 'bg-red-900/30 text-red-500' : 'bg-blue-900/30 text-blue-500'}`}>
+                              {modal.type === 'CONFIRM' ? <AlertTriangle className="w-6 h-6" /> : <Info className="w-6 h-6" />}
+                          </div>
+                          <div>
+                              <h3 className="text-xl font-bold text-white mb-2">{modal.title}</h3>
+                              <p className="text-gray-300 text-sm whitespace-pre-wrap leading-relaxed">{modal.message}</p>
+                          </div>
+                      </div>
+                  </div>
+                  <div className="bg-gray-800/50 p-4 border-t border-gray-700 flex justify-end gap-3 rounded-b-2xl">
+                      <button 
+                          onClick={closeModal} 
+                          className="px-4 py-2 text-gray-400 hover:text-white font-medium hover:bg-gray-800 rounded transition"
+                      >
+                          {modal.type === 'CONFIRM' ? 'Hủy Bỏ' : 'Đóng'}
+                      </button>
+                      {modal.type === 'CONFIRM' && (
+                          <button 
+                              onClick={() => {
+                                  if (modal.onConfirm) modal.onConfirm();
+                                  closeModal();
+                              }}
+                              className="px-5 py-2 bg-red-600 hover:bg-red-700 text-white rounded font-bold shadow-lg shadow-red-900/20 transition flex items-center gap-2"
+                          >
+                              <Trash2 className="w-4 h-4" /> Xác Nhận Xóa
+                          </button>
+                      )}
+                  </div>
+              </div>
+          </div>
+      )}
+
       <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
         <div>
            <h2 className="text-2xl font-bold text-white">Thư viện Video</h2>
@@ -117,6 +240,18 @@ const VideoLibrary: React.FC = () => {
         </div>
         
         <div className="flex flex-wrap items-center gap-2">
+            {/* DELETE BUTTON */}
+            {selectedIds.length > 0 && (
+                <button 
+                    onClick={handleDeleteSelected}
+                    disabled={isDeleting}
+                    className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-lg text-sm font-bold shadow-lg shadow-red-900/20 mr-2"
+                >
+                    {isDeleting ? <RefreshCw className="w-4 h-4 animate-spin"/> : <Trash2 className="w-4 h-4" />}
+                    Xóa ({selectedIds.length})
+                </button>
+            )}
+
             {/* Filters */}
             <div className="flex items-center bg-gray-800 rounded-lg p-1 border border-gray-700">
                 <Search className="w-4 h-4 text-gray-500 ml-2" />
@@ -128,6 +263,15 @@ const VideoLibrary: React.FC = () => {
                   className="bg-transparent text-sm text-white p-2 outline-none w-40"
                 />
             </div>
+
+            <button 
+                onClick={toggleSort}
+                className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-white px-3 py-2 rounded-lg text-sm border border-gray-700 transition"
+                title="Sắp xếp theo Tên"
+            >
+                {sortOrder === 'asc' ? <ArrowDownAZ className="w-4 h-4 text-blue-400"/> : <ArrowUpZA className="w-4 h-4 text-blue-400"/>}
+                {sortOrder === 'asc' ? 'A-Z' : 'Z-A'}
+            </button>
 
             <select 
               value={limit}
@@ -168,6 +312,7 @@ const VideoLibrary: React.FC = () => {
             <button 
                 onClick={() => fileInputRef.current?.click()}
                 className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm transition flex items-center gap-2"
+                title="Nếu đã chọn 'Tất cả kênh' ở bộ lọc, video sẽ không được gán kênh."
             >
                 <Upload className="w-4 h-4" />
                 Import
@@ -192,7 +337,18 @@ const VideoLibrary: React.FC = () => {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-gray-900/50 text-gray-400 text-sm border-b border-gray-700">
-                <th className="p-4 font-medium">Tên File & Đường Dẫn</th>
+                <th className="p-4 w-10">
+                    <input 
+                        type="checkbox" 
+                        onChange={handleSelectAll} 
+                        checked={videos.length > 0 && selectedIds.length === videos.length}
+                        className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-600 focus:ring-blue-500"
+                    />
+                </th>
+                <th className="p-4 font-medium flex items-center gap-2 cursor-pointer hover:text-white" onClick={toggleSort}>
+                    Tên File & Đường Dẫn
+                    {sortOrder === 'asc' ? <ArrowDownAZ className="w-3 h-3"/> : <ArrowUpZA className="w-3 h-3"/>}
+                </th>
                 <th className="p-4 font-medium">Kênh Sở Hữu</th>
                 <th className="p-4 font-medium">Metadata (Tiêu đề/Tag)</th>
                 <th className="p-4 font-medium">Trạng thái</th>
@@ -201,7 +357,15 @@ const VideoLibrary: React.FC = () => {
             </thead>
             <tbody className="divide-y divide-gray-700 text-sm">
               {videos.map(video => (
-                <tr key={video.id} className="hover:bg-gray-750 transition group">
+                <tr key={video.id} className={`hover:bg-gray-750 transition group ${selectedIds.includes(video.id) ? 'bg-blue-900/10' : ''}`}>
+                  <td className="p-4">
+                     <input 
+                        type="checkbox" 
+                        checked={selectedIds.includes(video.id)}
+                        onChange={() => handleSelectRow(video.id)}
+                        className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-600 focus:ring-blue-500"
+                     />
+                  </td>
                   <td className="p-4">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded bg-gray-900 flex items-center justify-center text-gray-500">
@@ -220,7 +384,9 @@ const VideoLibrary: React.FC = () => {
                               {video.channelName}
                           </span>
                       ) : (
-                          <span className="text-gray-600 text-xs italic">-- Tự do --</span>
+                          <span className="text-red-400 text-xs italic flex items-center gap-1">
+                              <X className="w-3 h-3"/> Chưa gán
+                          </span>
                       )}
                   </td>
                   <td className="p-4 max-w-xs">
@@ -281,13 +447,26 @@ const VideoLibrary: React.FC = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
           <div className="bg-gray-900 rounded-2xl border border-gray-700 w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh]">
             <div className="flex justify-between items-center p-6 border-b border-gray-800">
-              <h3 className="text-xl font-bold text-white">Chỉnh sửa Metadata</h3>
+              <h3 className="text-xl font-bold text-white">Chỉnh sửa Video</h3>
               <button onClick={() => setEditingVideo(null)} className="text-gray-400 hover:text-white">
                 <X className="w-6 h-6" />
               </button>
             </div>
             
             <div className="p-6 overflow-y-auto space-y-5">
+              <div>
+                <label className="block text-sm font-medium text-gray-400 mb-1">Kênh Sở Hữu</label>
+                <select 
+                   value={editChannelId}
+                   onChange={e => setEditChannelId(e.target.value)}
+                   className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-white outline-none focus:ring-2 focus:ring-blue-600"
+                >
+                    <option value="">-- Chưa gán kênh (Orphan) --</option>
+                    {channels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">Gán video cho kênh để Lập lịch (Scheduler) nhận diện.</p>
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-400 mb-1">Tiêu đề Video</label>
                 <input 
