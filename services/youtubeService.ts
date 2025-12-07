@@ -60,6 +60,7 @@ export const getChannelInfo = async (input: string, apiKey: string): Promise<You
 
 // NEW: Get Videos from Channel (via Uploads Playlist)
 // Return list of videos with basic stats
+// UPDATE: Fetch ALL videos using pagination
 export const getChannelVideos = async (channelIdInput: string, accessToken: string | null, apiKey: string): Promise<YouTubeVideoStats[]> => {
     // 1. Get Uploads Playlist ID
     // Support Handle fallback if DB has wrong ID format
@@ -82,19 +83,37 @@ export const getChannelVideos = async (channelIdInput: string, accessToken: stri
     const uploadsPlaylistId = chData.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
     if (!uploadsPlaylistId) return [];
 
-    // 2. Get Video IDs from Playlist (Max 50 recent)
-    const playlistUrl = `https://www.googleapis.com/youtube/v3/playlistItems?part=contentDetails&playlistId=${uploadsPlaylistId}&maxResults=50&key=${apiKey}`;
-    const plRes = await fetch(playlistUrl);
+    // 2. Get Video IDs from Playlist (Pagination Loop)
+    let videoIds: string[] = [];
+    let nextPageToken: string | undefined = '';
+    const MAX_VIDEOS_SAFETY_LIMIT = 2000; // Limit to prevent browser crash / excessive quota usage
     
-    if (!plRes.ok) {
-        const err = await plRes.json();
-        throw new Error(`Lỗi lấy danh sách Video: ${err.error?.message}`);
-    }
-    
-    const plData = await plRes.json();
-    if (!plData.items) return [];
+    do {
+        const playlistUrl = `https://www.googleapis.com/youtube/v3/playlistItems?part=contentDetails&playlistId=${uploadsPlaylistId}&maxResults=50&pageToken=${nextPageToken || ''}&key=${apiKey}`;
+        const plRes = await fetch(playlistUrl);
+        
+        if (!plRes.ok) {
+            // If error happens mid-stream (e.g. quota), break and return what we have
+            if (videoIds.length > 0) break; 
+            const err = await plRes.json();
+            throw new Error(`Lỗi lấy danh sách Video: ${err.error?.message}`);
+        }
+        
+        const plData = await plRes.json();
+        if (!plData.items || plData.items.length === 0) break;
 
-    const videoIds = plData.items.map((item: any) => item.contentDetails.videoId);
+        const ids = plData.items.map((item: any) => item.contentDetails.videoId);
+        videoIds = [...videoIds, ...ids];
+        
+        nextPageToken = plData.nextPageToken;
+
+        // Safety Break
+        if (videoIds.length >= MAX_VIDEOS_SAFETY_LIMIT) {
+            console.warn(`Đã đạt giới hạn an toàn ${MAX_VIDEOS_SAFETY_LIMIT} video. Dừng fetch.`);
+            break;
+        }
+
+    } while (nextPageToken);
 
     // 3. Get Stats for these videos
     return await getVideoStatistics(videoIds, accessToken, apiKey);
@@ -283,17 +302,28 @@ const mapStats = (items: any[]): YouTubeVideoStats[] => {
 // --- NEW ADVANCED FEATURES API ---
 
 // 7. Fetch Recent Comments (Unified)
-export const fetchRecentComments = async (accessToken: string, maxResults: number = 20): Promise<UnifiedComment[]> => {
-    // Note: 'allThreads' related is usually for channel owner
-    const url = `https://www.googleapis.com/youtube/v3/commentThreads?part=snippet&myChannelId=mine&maxResults=${maxResults}&order=time`;
+export const fetchRecentComments = async (accessToken: string, channelId: string, maxResults: number = 20): Promise<UnifiedComment[]> => {
+    // Requires 'allThreadsRelatedToChannelId' to get video comments. 
+    // Added 'textFormat=plainText' for consistency.
+    // ADDED: part=replies to fetch replies
+    if (!channelId) throw new Error("Missing Channel ID for comments fetch");
+
+    const url = `https://www.googleapis.com/youtube/v3/commentThreads?part=snippet,replies&allThreadsRelatedToChannelId=${channelId}&maxResults=${maxResults}&order=time&textFormat=plainText`;
     
     const response = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${accessToken}` }
+        headers: { 
+            'Authorization': `Bearer ${accessToken}`,
+            'Accept': 'application/json'
+        }
     });
     
     if (!response.ok) {
-        // If error 403, scope might be missing (need 'force-ssl')
-        console.warn("Fetch Comments Warning (Check Scopes):", response.status);
+        try {
+            const err = await response.json();
+            console.warn(`Fetch Comments API Error (${response.status}):`, err.error?.message);
+        } catch {
+            console.warn(`Fetch Comments API Error (${response.status})`);
+        }
         return [];
     }
 
@@ -302,16 +332,28 @@ export const fetchRecentComments = async (accessToken: string, maxResults: numbe
 
     return data.items.map((item: any) => {
         const top = item.snippet.topLevelComment.snippet;
+        const videoId = item.snippet.videoId;
+        
+        // Map replies if exist
+        const replies = item.replies?.comments?.map((r: any) => ({
+            id: r.id,
+            authorDisplayName: r.snippet.authorDisplayName,
+            authorProfileImageUrl: r.snippet.authorProfileImageUrl,
+            textDisplay: r.snippet.textDisplay,
+            publishedAt: r.snippet.publishedAt
+        })) || [];
+
         return {
             id: item.id,
             authorDisplayName: top.authorDisplayName,
             authorProfileImageUrl: top.authorProfileImageUrl,
             textDisplay: top.textDisplay,
             publishedAt: top.publishedAt,
-            videoTitle: 'Video/Post', // API này không trả về Title video trực tiếp, cần fetch phụ nếu muốn chính xác
+            videoTitle: videoId ? `Video ID: ${videoId}` : 'Community/Channel',
             channelId: item.snippet.channelId,
             channelName: '', // Fill later
-            canReply: item.snippet.canReply
+            canReply: item.snippet.canReply,
+            replies: replies.sort((a: any, b: any) => new Date(a.publishedAt).getTime() - new Date(b.publishedAt).getTime()) // Sort old to new
         };
     });
 }

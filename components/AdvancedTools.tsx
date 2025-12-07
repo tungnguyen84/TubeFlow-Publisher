@@ -1,13 +1,13 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   MessageCircle, Sparkles, TrendingUp, Edit3, Scissors, 
   RefreshCw, Search, Image as ImageIcon, CheckCircle2, 
-  Send, Users, Copy, ExternalLink, ThumbsUp, Eye, Calendar
+  Send, Users, Copy, ExternalLink, ThumbsUp, Eye, Calendar, Bot, Zap
 } from 'lucide-react';
 import { Channel, UnifiedComment, CompetitorVideo, VideoItem, VideoStatus } from '../types';
-import { fetchChannels, fetchSystemSettings, fetchVideos, bulkUpdateVideos, saveVideo } from '../services/supabaseService';
-import { fetchRecentComments, replyToComment, fetchCompetitorVideos } from '../services/youtubeService';
+import { fetchChannels, fetchSystemSettings, fetchVideos, bulkUpdateVideos, saveVideo, updateChannelAccessTokenOnly } from '../services/supabaseService';
+import { fetchRecentComments, replyToComment, fetchCompetitorVideos, refreshAccessToken } from '../services/youtubeService';
 import { generateCommentReply, analyzeThumbnail, findTrends } from '../services/geminiService';
 
 const TabButton = ({ icon: Icon, label, active, onClick }: any) => (
@@ -53,7 +53,7 @@ const AdvancedTools: React.FC = () => {
       </div>
 
       <div className="min-h-[500px]">
-        {activeTab === 'COMMUNITY' && <CommunityManager channels={channels} />}
+        {activeTab === 'COMMUNITY' && <CommunityManager channels={channels} settings={systemSettings} />}
         {activeTab === 'VISION' && <ThumbnailVision />}
         {activeTab === 'COMPETITOR' && <CompetitorTracker settings={systemSettings} />}
         {activeTab === 'BULK' && <BulkEditor />}
@@ -66,11 +66,39 @@ const AdvancedTools: React.FC = () => {
 // --- SUB COMPONENTS ---
 
 // 1. Unified Community
-const CommunityManager = ({ channels }: { channels: Channel[] }) => {
+const CommunityManager = ({ channels, settings }: { channels: Channel[], settings: any }) => {
   const [comments, setComments] = useState<UnifiedComment[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [replyText, setReplyText] = useState<Record<string, string>>({});
   const [aiLoading, setAiLoading] = useState<string | null>(null);
+
+  // AUTO REPLY STATE
+  const [isAutoReplyActive, setIsAutoReplyActive] = useState(false);
+  const [autoLog, setAutoLog] = useState<string>('');
+  const isAutoReplyRunningRef = useRef(false);
+
+  // Helper: Get Valid Token (Refresh if needed)
+  const getValidToken = async (ch: Channel) => {
+      let tokenToUse = ch.accessToken;
+      if (ch.tokenExpiresAt && Date.now() > (ch.tokenExpiresAt - 60 * 1000)) {
+          if (ch.refreshToken && ch.clientSecret) {
+               try {
+                   const clientId = ch.clientId || settings?.googleClientId;
+                   if (clientId) {
+                       const newToken = await refreshAccessToken(ch.refreshToken, clientId, ch.clientSecret);
+                       tokenToUse = newToken.access_token;
+                       await updateChannelAccessTokenOnly(ch.id, tokenToUse, newToken.expires_in);
+                   }
+               } catch (err) {
+                   console.warn(`Failed to refresh token for ${ch.name}:`, err);
+                   return null;
+               }
+          } else {
+               return null;
+          }
+      }
+      return tokenToUse;
+  }
 
   const loadComments = async () => {
     setIsLoading(true);
@@ -78,12 +106,15 @@ const CommunityManager = ({ channels }: { channels: Channel[] }) => {
     
     // Fetch parallel
     const promises = channels.map(async (ch) => {
-        if (!ch.accessToken) return [];
+        if (!ch.accessToken || !ch.youtubeId) return [];
+        const token = await getValidToken(ch);
+        if (!token) return [];
+
         try {
-            const res = await fetchRecentComments(ch.accessToken);
+            const res = await fetchRecentComments(token, ch.youtubeId);
             return res.map(c => ({ ...c, channelName: ch.name }));
         } catch (e) {
-            console.warn(`Error fetching comments for ${ch.name}`);
+            console.warn(`Error fetching comments for ${ch.name}`, e);
             return [];
         }
     });
@@ -106,31 +137,137 @@ const CommunityManager = ({ channels }: { channels: Channel[] }) => {
       setAiLoading(null);
   };
 
-  const sendReply = async (comment: UnifiedComment) => {
-      const text = replyText[comment.id];
+  const sendReply = async (comment: UnifiedComment, customText?: string) => {
+      const text = customText || replyText[comment.id];
       if (!text) return;
-      const channel = channels.find(c => c.name === comment.channelName); // Simplistic match, ideally use ID map
-      if (!channel?.accessToken) return alert("Lost token");
+      
+      // Optimistic Update locally to show immediately
+      const newReply = {
+          id: 'temp-' + Date.now(),
+          authorDisplayName: 'Me (Posting...)',
+          authorProfileImageUrl: '',
+          textDisplay: text,
+          publishedAt: new Date().toISOString()
+      };
+
+      setComments(prev => prev.map(c => {
+          if (c.id === comment.id) {
+              return { ...c, replies: [...(c.replies || []), newReply] };
+          }
+          return c;
+      }));
+
+      const channel = channels.find(c => c.name === comment.channelName); 
+      if (!channel) return;
+      const token = await getValidToken(channel);
+      if (!token) return alert("Lost token");
 
       try {
-          await replyToComment(channel.accessToken, comment.id, text);
-          alert("Replied!");
-          setComments(prev => prev.filter(c => c.id !== comment.id)); // Remove from list or mark as replied
+          await replyToComment(token, comment.id, text);
+          if (!customText) {
+              alert("Replied!");
+              setReplyText(prev => ({ ...prev, [comment.id]: '' }));
+              // Reload to get real data from server (optional, but good for sync)
+              // loadComments(); 
+          }
       } catch (e) {
-          alert("Error sending reply");
+          console.error(e);
+          if (!customText) alert("Error sending reply");
       }
   };
 
+  // --- AUTO REPLY LOGIC ---
+  useEffect(() => {
+      let interval: any;
+      if (isAutoReplyActive) {
+          const runCycle = async () => {
+              if (isAutoReplyRunningRef.current) return;
+              isAutoReplyRunningRef.current = true;
+              
+              setAutoLog('Scanning for new comments...');
+              
+              try {
+                  for (const ch of channels) {
+                      if (!isAutoReplyActive) break; // Check break signal
+                      if (!ch.accessToken || !ch.youtubeId) continue;
+                      
+                      const token = await getValidToken(ch);
+                      if (!token) continue;
+
+                      // Fetch recent
+                      const recent = await fetchRecentComments(token, ch.youtubeId, 10); // Check 10 latest
+                      
+                      // Filter unreplied
+                      const unreplied = recent.filter(c => (!c.replies || c.replies.length === 0));
+                      
+                      for (const c of unreplied) {
+                           if (!isAutoReplyActive) break;
+                           setAutoLog(`Replying to ${c.authorDisplayName} on ${ch.name}...`);
+                           
+                           // Generate AI Reply
+                           const suggestions = await generateCommentReply(c.textDisplay, 'Friendly');
+                           if (suggestions.length > 0) {
+                               const aiText = suggestions[0]; // Pick first one
+                               await replyToComment(token, c.id, aiText);
+                               
+                               // Add to UI
+                               const mappedComment = { ...c, channelName: ch.name };
+                               // @ts-ignore
+                               sendReply(mappedComment, aiText); // This updates UI state
+                               
+                               // Small delay to avoid spam/rate limit
+                               await new Promise(r => setTimeout(r, 3000));
+                           }
+                      }
+                  }
+                  if (isAutoReplyActive) setAutoLog('Cycle finished. Waiting...');
+              } catch (e: any) {
+                  setAutoLog('Error: ' + e.message);
+              } finally {
+                  isAutoReplyRunningRef.current = false;
+              }
+          };
+
+          runCycle(); // Run immediately
+          interval = setInterval(runCycle, 60000); // Run every 60s
+      } else {
+          setAutoLog('');
+      }
+
+      return () => clearInterval(interval);
+  }, [isAutoReplyActive, channels]);
+
   return (
     <div className="space-y-4">
-        <div className="flex justify-between">
-            <h3 className="text-lg font-bold text-white">Hộp thư tập trung</h3>
-            <button onClick={loadComments} className="bg-blue-600 px-3 py-1 rounded text-white text-sm flex items-center gap-2">
-                <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} /> Sync
-            </button>
+        <div className="flex justify-between items-center bg-gray-800 p-3 rounded-lg border border-gray-700">
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                Hộp thư tập trung
+            </h3>
+            
+            <div className="flex items-center gap-3">
+                {isAutoReplyActive && (
+                    <span className="text-xs text-green-400 animate-pulse font-mono">{autoLog}</span>
+                )}
+                
+                <button 
+                    onClick={() => setIsAutoReplyActive(!isAutoReplyActive)}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold border transition
+                    ${isAutoReplyActive 
+                        ? 'bg-purple-600 text-white border-purple-500 shadow-[0_0_10px_rgba(147,51,234,0.5)]' 
+                        : 'bg-gray-700 text-gray-400 border-gray-600 hover:text-white'}`}
+                >
+                    <Bot className="w-4 h-4" />
+                    {isAutoReplyActive ? 'Auto Reply: ON' : 'Auto Reply: OFF'}
+                </button>
+
+                <button onClick={loadComments} className="bg-blue-600 px-3 py-2 rounded text-white text-sm flex items-center gap-2 hover:bg-blue-700">
+                    <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} /> Sync
+                </button>
+            </div>
         </div>
+
         <div className="bg-gray-800 rounded-xl border border-gray-700 p-4 space-y-4 max-h-[600px] overflow-y-auto">
-            {comments.length === 0 && !isLoading && <p className="text-gray-500 text-center">Chưa có bình luận mới.</p>}
+            {comments.length === 0 && !isLoading && <p className="text-gray-500 text-center">Chưa có bình luận mới. (Bấm Sync để tải)</p>}
             {comments.map(c => (
                 <div key={c.id} className="bg-gray-900 p-4 rounded-lg border border-gray-700 flex gap-4">
                     <img src={c.authorProfileImageUrl} className="w-10 h-10 rounded-full" />
@@ -141,6 +278,24 @@ const CommunityManager = ({ channels }: { channels: Channel[] }) => {
                         </div>
                         <p className="text-gray-300 text-sm mt-1">{c.textDisplay}</p>
                         
+                        {/* REPLIES SECTION */}
+                        {c.replies && c.replies.length > 0 && (
+                            <div className="mt-3 space-y-2 pl-4 border-l-2 border-gray-700">
+                                {c.replies.map(r => (
+                                    <div key={r.id} className="flex gap-3 items-start bg-gray-800/50 p-2 rounded">
+                                        <img src={r.authorProfileImageUrl || 'https://ui-avatars.com/api/?name=Me'} className="w-6 h-6 rounded-full" />
+                                        <div>
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-xs font-bold text-blue-300">{r.authorDisplayName}</span>
+                                                <span className="text-[10px] text-gray-500">{new Date(r.publishedAt).toLocaleDateString()}</span>
+                                            </div>
+                                            <p className="text-sm text-gray-400">{r.textDisplay}</p>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
                         {/* Reply Box */}
                         <div className="mt-3 flex gap-2">
                             <input 

@@ -1,4 +1,5 @@
 
+
 export enum ChannelStatus {
   ACTIVE = 'ACTIVE',
   EXPIRED = 'EXPIRED',
@@ -216,6 +217,13 @@ export interface UnifiedComment {
     channelId: string;
     channelName: string; // Mapped locally
     canReply: boolean;
+    replies?: {
+        id: string;
+        authorDisplayName: string;
+        authorProfileImageUrl: string;
+        textDisplay: string;
+        publishedAt: string;
+    }[];
 }
 
 export interface CompetitorVideo {

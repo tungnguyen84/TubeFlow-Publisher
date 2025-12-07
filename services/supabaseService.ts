@@ -409,7 +409,7 @@ export const syncVideosForChannel = async (channelId: string, folderPath: string
     const cleanFolderPath = folderPath.endsWith('\\') || folderPath.endsWith('/') ? folderPath : folderPath + '\\';
     for (const file of files) {
         const fullPath = cleanFolderPath + file.name;
-        const fileNameNoExt = file.name.replace(/\.[^/.]+$/, "");
+        // const fileNameNoExt = file.name.replace(/\.[^/.]+$/, ""); // User removed filename as title
         const { data: existing } = await supabaseInstance
             .from('videos')
             .select('id')
@@ -425,7 +425,7 @@ export const syncVideosForChannel = async (channelId: string, folderPath: string
                 file_path: fullPath,
                 channel_id: channelId,
                 status: 'DRAFT',
-                title_template: fileNameNoExt,
+                title_template: '', // Changed to empty string
                 desc_template: '',
                 tags: []
             });

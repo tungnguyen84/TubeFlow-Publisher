@@ -43,25 +43,24 @@ const Analytics: React.FC = () => {
           const info = await getChannelInfo(channel.youtubeId, apiKey);
           
           if (info) {
-              let finalTotalViews = info.totalViews;
+              let finalTotalViews = 0;
 
-              // --- AUTO-CORRECTION LOGIC ---
-              // Nếu YouTube trả về 0 view nhưng có video, ta sẽ thử tính tổng từ danh sách video
-              if (finalTotalViews === 0 && info.videoCount > 0) {
-                   try {
-                       console.log("YouTube reported 0 views. Attempting to calculate from recent videos...");
-                       // Lấy danh sách video để cộng dồn
-                       const vids = await getChannelVideos(channel.youtubeId, channel.accessToken || null, apiKey);
-                       const calculatedViews = vids.reduce((sum, v) => sum + v.viewCount, 0);
-                       if (calculatedViews > 0) {
-                           finalTotalViews = calculatedViews;
-                           console.log(`Auto-corrected views: ${calculatedViews}`);
-                       }
-                   } catch (err) {
-                       console.warn("Could not auto-correct views:", err);
+              // --- FORCE CALCULATION FROM VIDEOS (USER REQUEST) ---
+              // Luôn tính tổng view từ danh sách video thay vì dùng số liệu thống kê chung của kênh (có thể bị delay hoặc sai lệch)
+              try {
+                   const vids = await getChannelVideos(channel.youtubeId, channel.accessToken || null, apiKey);
+                   const calculatedViews = vids.reduce((sum, v) => sum + v.viewCount, 0);
+                   finalTotalViews = calculatedViews;
+                   console.log(`Calculated total views from videos: ${calculatedViews}`);
+                   
+                   // Nếu video list trả về rỗng (lỗi hoặc ko có video public) mà info.totalViews > 0 thì fallback
+                   if (vids.length === 0 && (info.totalViews || 0) > 0) {
+                       finalTotalViews = info.totalViews || 0;
                    }
+              } catch (err) {
+                   console.warn("Could not calculate views from videos, falling back to channel stats:", err);
+                   finalTotalViews = info.totalViews || 0;
               }
-              // -----------------------------
 
               // Save to Database
               await updateChannelStats(channel.id, {
@@ -94,7 +93,7 @@ const Analytics: React.FC = () => {
                   }) : null);
               }
               
-              alert(`Cập nhật thành công!\n- Subs: ${info.subscriberCount?.toLocaleString()}\n- Views: ${finalTotalViews?.toLocaleString()}\n- Videos: ${info.videoCount?.toLocaleString()}`);
+              alert(`Cập nhật thành công!\n- Subs: ${info.subscriberCount?.toLocaleString()}\n- Views (Cộng dồn video): ${finalTotalViews?.toLocaleString()}\n- Videos: ${info.videoCount?.toLocaleString()}`);
           } else {
               alert("Không lấy được thông tin kênh. Có thể ID kênh sai hoặc kênh đã bị xóa/ẩn.");
           }
@@ -118,11 +117,12 @@ const Analytics: React.FC = () => {
            setChannelVideos(vids);
 
            // --- CHECK & FIX LOCAL VIEW COUNT ---
-           // Nếu lúc load video thấy tổng view thực tế > 0 mà channel.totalViews vẫn bằng 0 -> Update DB luôn
+           // Nếu lúc load video thấy tổng view thực tế > 0 mà channel.totalViews sai lệch -> Update DB luôn
            if (vids.length > 0) {
                const realTotalViews = vids.reduce((sum, v) => sum + v.viewCount, 0);
-               if (realTotalViews > 0 && (channel.totalViews === 0 || !channel.totalViews)) {
-                   console.log("Fixing 0 views based on loaded video list...");
+               // Logic: Nếu số view hiển thị (channel.totalViews) khác với tổng view thực tế (realTotalViews) thì cập nhật
+               if (channel.totalViews !== realTotalViews) {
+                   console.log(`Fixing views mismatch based on loaded video list: ${channel.totalViews} -> ${realTotalViews}`);
                    await updateChannelStats(channel.id, { totalViews: realTotalViews });
                    
                    // Update UI immediately
