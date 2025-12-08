@@ -133,8 +133,8 @@ export const getGoogleAuthUrl = (clientId: string, redirectUri: string, stateCha
 export const exchangeCodeForToken = async (code: string, clientId: string, clientSecret: string, redirectUri: string) => {
     const params = new URLSearchParams();
     params.append('code', code);
-    params.append('client_id', clientId);
-    params.append('client_secret', clientSecret);
+    params.append('client_id', clientId.trim()); // Trim safety
+    params.append('client_secret', clientSecret.trim()); // Trim safety
     params.append('redirect_uri', redirectUri);
     params.append('grant_type', 'authorization_code');
 
@@ -145,8 +145,16 @@ export const exchangeCodeForToken = async (code: string, clientId: string, clien
     });
 
     if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error_description || "Lỗi đổi Code lấy Token");
+        // Try to parse detailed JSON error first
+        try {
+            const err = await response.json();
+            // Google usually returns { error: "invalid_client", error_description: "..." }
+            const msg = err.error_description || err.error || JSON.stringify(err);
+            throw new Error(`Google Auth Error (${response.status}): ${msg}`);
+        } catch (parseError) {
+             // If JSON parse fails, fallback to status text
+             throw new Error(`Google Auth Error (${response.status}): ${response.statusText}`);
+        }
     }
 
     return await response.json(); // trả về { access_token, refresh_token, expires_in, ... }
@@ -156,8 +164,8 @@ export const exchangeCodeForToken = async (code: string, clientId: string, clien
 export const refreshAccessToken = async (refreshToken: string, clientId: string, clientSecret: string) => {
     const params = new URLSearchParams();
     params.append('refresh_token', refreshToken);
-    params.append('client_id', clientId);
-    params.append('client_secret', clientSecret);
+    params.append('client_id', clientId.trim());
+    params.append('client_secret', clientSecret.trim());
     params.append('grant_type', 'refresh_token');
 
     const response = await fetch('https://oauth2.googleapis.com/token', {
@@ -167,7 +175,7 @@ export const refreshAccessToken = async (refreshToken: string, clientId: string,
     });
 
     if (!response.ok) {
-        throw new Error("Không thể refresh token (Có thể quyền đã bị thu hồi).");
+        throw new Error("Không thể refresh token (Có thể quyền đã bị thu hồi hoặc Client Secret sai).");
     }
 
     return await response.json(); // trả về { access_token, expires_in, ... }

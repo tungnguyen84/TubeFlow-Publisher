@@ -59,17 +59,27 @@ const ChannelManager: React.FC = () => {
         if (code && stateChannelId) {
             try {
                 setIsLoading(true);
+                // Important: Fetch FRESH channel data from DB to get the latest Client Secret
                 const currentChannels = await fetchChannels();
                 const targetChannel = currentChannels.find(c => c.id === stateChannelId);
                 const systemSettings = await fetchSystemSettings();
-                const clientIdToUse = targetChannel?.clientId || systemSettings.googleClientId;
-                const clientSecretToUse = targetChannel?.clientSecret || ''; 
-                if (!clientSecretToUse && targetChannel?.clientId) {
-                    alert("Cảnh báo: Không tìm thấy Client Secret.");
+                
+                // Determine ID/Secret
+                const clientIdToUse = targetChannel?.clientId?.trim() || systemSettings.googleClientId?.trim();
+                const clientSecretToUse = targetChannel?.clientSecret?.trim() || ''; 
+                
+                if (!clientIdToUse) throw new Error("Missing Client ID (Not found in Channel or System).");
+                
+                // Safety Check for Custom Apps
+                if (targetChannel?.clientId && !clientSecretToUse) {
+                    throw new Error("Kênh dùng Custom App nhưng thiếu Client Secret trong Database. Vui lòng cập nhật lại kênh trước khi kết nối.");
                 }
+
                 let redirectUri = window.location.origin + window.location.pathname;
                 if (redirectUri.endsWith('/')) redirectUri = redirectUri.slice(0, -1);
+                
                 const tokenData = await exchangeCodeForToken(code, clientIdToUse!, clientSecretToUse!, redirectUri);
+                
                 await updateChannelCredentials(stateChannelId, tokenData.access_token, tokenData.refresh_token, tokenData.expires_in);
                 window.history.replaceState(null, '', window.location.pathname);
                 alert("Kết nối thành công! Refresh Token đã được lưu.");
@@ -140,8 +150,8 @@ const ChannelManager: React.FC = () => {
     setIsLoading(true);
     try {
       const configData = {
-        clientId: customClientId,
-        clientSecret: customClientSecret,
+        clientId: customClientId.trim(), // Trim inputs
+        clientSecret: customClientSecret.trim(), // Trim inputs
         defaultTitle: defaultTitle,
         defaultDescription: defaultDescription,
         defaultTags: defaultTags.split(',').map(t => t.trim()).filter(t => t),
@@ -197,21 +207,26 @@ const ChannelManager: React.FC = () => {
   };
 
   const handleAuthorize = async (channel: Channel) => {
-    let clientId = channel.clientId;
+    let clientId = channel.clientId?.trim();
     if (!clientId) {
         const db = await fetchSystemSettings();
-        clientId = db.googleClientId;
+        clientId = db.googleClientId?.trim();
     }
     if (!clientId) {
       alert("Thiếu Client ID. Hãy bấm nút Edit để cấu hình App riêng hoặc vào Settings hệ thống.");
       return;
     }
+    
+    // Check Secret before starting flow
+    // NOTE: System secret is hidden, but Custom secret must exist
     if (channel.clientId && !channel.clientSecret) {
-        alert("Bạn đang dùng Client ID riêng nhưng thiếu Client Secret. Vui lòng bấm Edit để bổ sung.");
+        alert("Bạn đang dùng Client ID riêng nhưng thiếu Client Secret. Vui lòng bấm Edit để bổ sung trước khi kết nối.");
         return;
     }
+
     let redirectUri = window.location.origin + window.location.pathname;
     if (redirectUri.endsWith('/')) redirectUri = redirectUri.slice(0, -1);
+    
     const authUrl = getGoogleAuthUrl(clientId, redirectUri, channel.id);
     window.location.href = authUrl;
   };
