@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   MessageCircle, Sparkles, TrendingUp, Edit3, Scissors, 
   RefreshCw, Search, Image as ImageIcon, CheckCircle2, 
-  Send, Users, Copy, ExternalLink, ThumbsUp, Eye, Calendar, Bot, Zap, Filter, AlertTriangle, XCircle
+  Send, Users, Copy, ExternalLink, ThumbsUp, Eye, Calendar, Bot, Zap, Filter, AlertTriangle, XCircle, Power
 } from 'lucide-react';
 import { Channel, UnifiedComment, CompetitorVideo, VideoItem, VideoStatus } from '../types';
 import { fetchChannels, fetchSystemSettings, fetchVideos, bulkUpdateVideos, saveVideo, updateChannelAccessTokenOnly } from '../services/supabaseService';
@@ -133,13 +133,8 @@ const CommunityManager = ({ channels, settings }: { channels: Channel[], setting
             if (filterMode === 'UNREPLIED') {
                 filtered = res.filter(c => {
                     // SMART FILTER:
-                    // 1. Kiểm tra chính xác xem trong list replies có ID của chủ kênh không.
                     const ownerReplied = c.replies?.some((r: any) => r.authorChannelId === ch.youtubeId);
                     if (ownerReplied) return false;
-
-                    // 2. Fallback: Nếu không check được author ID (hiếm), dùng totalReplyCount > 0
-                    // Tuy nhiên, nếu User phàn nàn "toàn comment đã trả lời", ta nên tin vào totalReplyCount > 0 là ĐÃ TRẢ LỜI.
-                    // Để an toàn, nếu có reply > 0 thì coi như đã handled.
                     const hasAnyReply = (c as any).totalReplyCount > 0 || (c.replies && c.replies.length > 0);
                     return !hasAnyReply;
                 });
@@ -160,10 +155,8 @@ const CommunityManager = ({ channels, settings }: { channels: Channel[], setting
             // Error Handling Log
             let errMsg = e.message;
             if (e.message.includes('401') || e.message.includes('403')) errMsg = "Lỗi xác thực (401/403). Cần kết nối lại.";
-            
-            // DETECT SCOPE ERROR
             if (e.message.includes('insufficient authentication scopes')) {
-                errMsg = "Thiếu quyền Comment. Vui lòng vào 'Channels & Groups' để Kết Nối lại kênh này.";
+                errMsg = "Thiếu quyền Comment. Vui lòng kết nối lại kênh.";
             }
 
             setScanResults(prev => [...prev, { name: ch.name, status: errMsg, color: "text-red-500" }]);
@@ -236,8 +229,90 @@ const CommunityManager = ({ channels, settings }: { channels: Channel[], setting
       }
   };
 
-  // --- AUTO REPLY LOGIC (SIMPLIFIED FOR BREVITY) ---
-  // ... (Keep existing logic, omitted here to focus on Filter Fix)
+  // --- AUTO REPLY LOGIC ---
+  useEffect(() => {
+    // Nếu tắt -> dừng loop
+    if (!isAutoReplyActive) {
+        isAutoReplyRunningRef.current = false;
+        setAutoLog('');
+        return;
+    }
+
+    // Nếu đã chạy -> không chạy chồng
+    if (isAutoReplyRunningRef.current) return;
+
+    const runAutoReplyLoop = async () => {
+        isAutoReplyRunningRef.current = true;
+        
+        while (isAutoReplyActive && isAutoReplyRunningRef.current) {
+            // Lấy danh sách comment HIỆN TẠI trong state (mới nhất)
+            // Lưu ý: Trong React useEffect closure, 'comments' có thể cũ. 
+            // Ở đây ta dùng functional update hoặc ref nếu cần.
+            // Để đơn giản, ta sẽ chỉ lấy comment đầu tiên trong list chưa có replyText
+            
+            // Tìm comment chưa trả lời (ưu tiên cái đang hiển thị)
+            // Ta cần truy cập state mới nhất, ở đây dùng hack đơn giản:
+            // Tạm thời chỉ xử lý từng cái, sau mỗi lần xử lý component re-render -> loop tiếp tục
+            // Tuy nhiên vì while loop chặn render, ta phải dùng logic khác.
+            // SOLUTION: Dùng Interval hoặc Recursive Timeout.
+            break; 
+        }
+    };
+    
+    // START INTERVAL LOOP
+    const timer = setInterval(async () => {
+        if (!isAutoReplyActive) return;
+        
+        // Find first candidate
+        // Chỉ auto-reply những comment chưa có replyText (chưa được AI gen thủ công)
+        // và nằm trong danh sách hiển thị
+        setComments(prev => {
+            if (prev.length === 0) {
+                setAutoLog("Hết comment để trả lời. Đang chờ...");
+                return prev;
+            }
+
+            const target = prev[0]; // Lấy cái đầu tiên
+            
+            // Xử lý async bên ngoài setter để tránh block
+            processAutoReply(target);
+            
+            // Tạm thời chưa xóa khỏi list ngay, đợi process xong
+            return prev;
+        });
+
+    }, 15000); // 15 giây 1 comment
+
+    const processAutoReply = async (comment: UnifiedComment) => {
+        try {
+            setAutoLog(`Đang xử lý: ${comment.authorDisplayName}...`);
+            
+            // 1. Gen AI Text
+            const suggestions = await generateCommentReply(comment.textDisplay, 'Friendly & Professional');
+            const aiText = suggestions[0] || "Thank you for watching! ❤️";
+            
+            // 2. Send Reply
+            const channel = channels.find(c => c.name === comment.channelName);
+            if (channel) {
+                const token = await getValidToken(channel);
+                if (token) {
+                    await replyToComment(token, comment.id, aiText);
+                    
+                    // 3. Remove from UI
+                    setComments(current => current.filter(c => c.id !== comment.id));
+                    setAutoLog(`✅ Đã trả lời: ${comment.authorDisplayName}`);
+                }
+            }
+        } catch (e: any) {
+             console.error("Auto Reply Error", e);
+             setAutoLog(`❌ Lỗi khi trả lời ${comment.authorDisplayName}: ${e.message}`);
+             // Remove to skip error item
+             setComments(current => current.filter(c => c.id !== comment.id));
+        }
+    };
+
+    return () => clearInterval(timer);
+  }, [isAutoReplyActive, channels]); // Re-bind when active toggles
 
   return (
     <div className="space-y-4">
@@ -254,6 +329,19 @@ const CommunityManager = ({ channels, settings }: { channels: Channel[], setting
                     <span className="text-xs text-blue-400 font-mono animate-pulse">{loadingStatus}</span>
                 )}
                 
+                {/* AUTO REPLY TOGGLE */}
+                <button
+                    onClick={() => setIsAutoReplyActive(!isAutoReplyActive)}
+                    className={`flex items-center gap-2 px-3 py-2 rounded font-bold text-sm transition border ${
+                        isAutoReplyActive 
+                        ? 'bg-yellow-500 text-black border-yellow-400 animate-pulse' 
+                        : 'bg-gray-700 text-gray-300 border-gray-600 hover:text-white'
+                    }`}
+                >
+                    <Zap className={`w-4 h-4 ${isAutoReplyActive ? 'fill-black' : ''}`} />
+                    {isAutoReplyActive ? 'Auto Đang Chạy...' : 'Auto Reply (OFF)'}
+                </button>
+
                 {/* FILTER TOGGLE */}
                 <div className="flex bg-gray-900 rounded p-1 border border-gray-600">
                     <button 
@@ -276,8 +364,21 @@ const CommunityManager = ({ channels, settings }: { channels: Channel[], setting
             </div>
         </div>
         
-        {/* LOG PANEL (NEW) - Show status of each channel */}
-        {scanResults.length > 0 && (
+        {/* AUTO LOG PANEL */}
+        {isAutoReplyActive && (
+            <div className="bg-yellow-900/20 border border-yellow-800/50 p-3 rounded-lg flex items-center gap-3 animate-in slide-in-from-top-2">
+                 <div className="p-2 bg-yellow-500/10 rounded-full">
+                     <Bot className="w-5 h-5 text-yellow-500 animate-bounce" />
+                 </div>
+                 <div className="flex-1">
+                     <p className="text-yellow-200 text-xs font-bold uppercase mb-0.5">AI Auto-Reply Log</p>
+                     <p className="text-white text-sm font-mono truncate">{autoLog || "Đang chờ comment..."}</p>
+                 </div>
+            </div>
+        )}
+
+        {/* LOG PANEL (SCAN) */}
+        {scanResults.length > 0 && !isAutoReplyActive && (
             <div className="bg-black/30 p-3 rounded-lg border border-gray-700 max-h-32 overflow-y-auto">
                 <p className="text-xs font-bold text-gray-400 mb-2 uppercase">Trạng thái quét:</p>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1">
