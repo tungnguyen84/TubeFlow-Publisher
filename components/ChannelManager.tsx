@@ -275,7 +275,7 @@ const ChannelManager: React.FC = () => {
       }
   };
 
-  // --- UPLOAD LOGIC ---
+  // --- UPLOAD LOGIC (Kept for reference but hidden from UI now) ---
   const handleUploadClick = (channel: Channel) => {
     targetChannelIdRef.current = channel.id;
     if(fileInputRef.current) fileInputRef.current.click();
@@ -393,14 +393,6 @@ const ChannelManager: React.FC = () => {
                             * Dùng Client ID riêng
                         </div>
                     )}
-                    {!hasRefreshToken && (
-                        <button 
-                          onClick={() => handleAuthorize(channel)}
-                          className="mt-1 w-full text-center bg-blue-600 hover:bg-blue-700 text-white text-xs py-1.5 rounded transition"
-                        >
-                            Kết nối
-                        </button>
-                    )}
                 </div>
 
                 {/* Folder & Defaults Info */}
@@ -415,12 +407,13 @@ const ChannelManager: React.FC = () => {
               
               {/* Actions Footer */}
               <div className="bg-gray-800/50 border-t border-gray-700 p-2 flex justify-between items-center">
+                 {/* REPLACED UPLOAD BUTTON WITH RE-CONNECT */}
                  <button 
-                    onClick={() => handleUploadClick(channel)}
-                    className="flex items-center gap-1 px-3 py-1.5 bg-green-700/50 hover:bg-green-600 text-green-100 text-xs rounded transition"
-                    title="Chọn Video để Upload lên kênh này"
+                    onClick={() => handleAuthorize(channel)}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-blue-700/50 hover:bg-blue-600 text-blue-100 text-xs rounded transition"
+                    title="Kết nối lại để cập nhật quyền hoặc thông tin đăng nhập"
                  >
-                    <UploadCloud className="w-4 h-4" /> Upload
+                    <RefreshCw className="w-4 h-4" /> Kết Nối Lại
                  </button>
 
                  <div className="flex gap-1">

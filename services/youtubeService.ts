@@ -121,7 +121,10 @@ export const getChannelVideos = async (channelIdInput: string, accessToken: stri
 
 // 2. Tạo URL OAuth (Code Flow - access_type=offline để lấy Refresh Token)
 export const getGoogleAuthUrl = (clientId: string, redirectUri: string, stateChannelId: string) => {
-    const scope = 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.force-ssl';
+    // UPDATED SCOPE: Added 'https://www.googleapis.com/auth/youtube' (Full Access)
+    // This ensures we have permission for Comments, Captions, Community Posts, etc.
+    const scope = 'https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.force-ssl';
+    
     // access_type=offline & prompt=consent là bắt buộc để lấy refresh_token
     return `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=${stateChannelId}&access_type=offline&prompt=consent&include_granted_scopes=true`;
 };
@@ -302,43 +305,58 @@ const mapStats = (items: any[]): YouTubeVideoStats[] => {
 // --- NEW ADVANCED FEATURES API ---
 
 // 7. Fetch Recent Comments (Unified)
-export const fetchRecentComments = async (accessToken: string, channelId: string, maxResults: number = 20): Promise<UnifiedComment[]> => {
-    // Requires 'allThreadsRelatedToChannelId' to get video comments. 
-    // Added 'textFormat=plainText' for consistency.
-    // ADDED: part=replies to fetch replies
+export const fetchRecentComments = async (accessToken: string, channelId: string, maxResultsToScan: number = 500): Promise<UnifiedComment[]> => {
+    // UPDATED: Scan up to 500 items (5 pages)
+    
     if (!channelId) throw new Error("Missing Channel ID for comments fetch");
+    
+    let allItems: any[] = [];
+    let nextPageToken: string | undefined = '';
+    let fetchedCount = 0;
+    
+    // Loop to fetch multiple pages (YouTube max per page is 100)
+    do {
+        const fetchSize = Math.min(100, maxResultsToScan - fetchedCount);
+        if (fetchSize <= 0) break;
 
-    const url = `https://www.googleapis.com/youtube/v3/commentThreads?part=snippet,replies&allThreadsRelatedToChannelId=${channelId}&maxResults=${maxResults}&order=time&textFormat=plainText`;
-    
-    const response = await fetch(url, {
-        headers: { 
-            'Authorization': `Bearer ${accessToken}`,
-            'Accept': 'application/json'
-        }
-    });
-    
-    if (!response.ok) {
-        try {
+        const url = `https://www.googleapis.com/youtube/v3/commentThreads?part=snippet,replies&allThreadsRelatedToChannelId=${channelId}&maxResults=100&order=time&textFormat=plainText&pageToken=${nextPageToken || ''}`;
+        
+        const response = await fetch(url, {
+            headers: { 
+                'Authorization': `Bearer ${accessToken}`,
+                'Accept': 'application/json'
+            }
+        });
+        
+        if (!response.ok) {
             const err = await response.json();
-            console.warn(`Fetch Comments API Error (${response.status}):`, err.error?.message);
-        } catch {
-            console.warn(`Fetch Comments API Error (${response.status})`);
+            // If we already have some items, return them instead of failing completely (partial success)
+            if (allItems.length > 0) break; 
+            throw new Error(err.error?.message || `YouTube API Error ${response.status}`);
         }
-        return [];
-    }
 
-    const data = await response.json();
-    if(!data.items) return [];
+        const data = await response.json();
+        const items = data.items || [];
+        allItems = [...allItems, ...items];
+        fetchedCount += items.length;
+        nextPageToken = data.nextPageToken;
 
-    return data.items.map((item: any) => {
+        // Safety break
+        if (fetchedCount >= maxResultsToScan) break;
+
+    } while (nextPageToken);
+
+    return allItems.map((item: any) => {
         const top = item.snippet.topLevelComment.snippet;
         const videoId = item.snippet.videoId;
+        const totalReplyCount = item.snippet.totalReplyCount || 0;
         
         // Map replies if exist
         const replies = item.replies?.comments?.map((r: any) => ({
             id: r.id,
             authorDisplayName: r.snippet.authorDisplayName,
             authorProfileImageUrl: r.snippet.authorProfileImageUrl,
+            authorChannelId: r.snippet.authorChannelId?.value, // IMPORTANT: To check if OWNER replied
             textDisplay: r.snippet.textDisplay,
             publishedAt: r.snippet.publishedAt
         })) || [];
@@ -350,10 +368,11 @@ export const fetchRecentComments = async (accessToken: string, channelId: string
             textDisplay: top.textDisplay,
             publishedAt: top.publishedAt,
             videoTitle: videoId ? `Video ID: ${videoId}` : 'Community/Channel',
-            channelId: item.snippet.channelId,
-            channelName: '', // Fill later
+            channelId: item.snippet.channelId, // This is the Channel ID of the VIDEO OWNER (You)
+            channelName: '', 
             canReply: item.snippet.canReply,
-            replies: replies.sort((a: any, b: any) => new Date(a.publishedAt).getTime() - new Date(b.publishedAt).getTime()) // Sort old to new
+            replies: replies.sort((a: any, b: any) => new Date(a.publishedAt).getTime() - new Date(b.publishedAt).getTime()),
+            totalReplyCount: totalReplyCount 
         };
     });
 }
