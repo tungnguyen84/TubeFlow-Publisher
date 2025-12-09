@@ -1,11 +1,21 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
+import { YouTubeVideoStats } from "../types";
 
 export interface AIMetadataResult {
   titles: string[];
   description: string;
   tags: string[];
   hashtags: string[];
+}
+
+export interface ChannelAuditResult {
+    overallScore: number;
+    strengths: string[];
+    weaknesses: string[];
+    actionPlan: string[];
+    viralIdeas: string[];
+    uploadFrequencyComment: string;
 }
 
 // Hàm gợi ý giờ đăng
@@ -226,5 +236,108 @@ export const findTrends = async (niche: string): Promise<{topic: string, reason:
         ];
     } catch (e) {
         return [{ topic: "Error", reason: "Could not fetch trends." }];
+    }
+}
+
+// 4. Channel Audit
+export const analyzeChannelPerformance = async (
+    channelName: string, 
+    stats: { subs: number, views: number, videoCount: number }, 
+    recentVideos: YouTubeVideoStats[]
+): Promise<ChannelAuditResult | null> => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+    // Prepare context from recent videos (take last 10)
+    const videoContext = recentVideos.slice(0, 10).map(v => 
+        `- Title: "${v.title}" | Views: ${v.viewCount} | Likes: ${v.likeCount} | Comments: ${v.commentCount} | Date: ${v.publishedAt}`
+    ).join("\n");
+
+    const prompt = `
+        You are a Top Tier YouTube Strategy Consultant.
+        
+        Analyze this channel: "${channelName}"
+        Stats: ${stats.subs} Subs, ${stats.views} Total Views, ${stats.videoCount} Videos.
+        
+        Recent Performance (Last 10 videos):
+        ${videoContext}
+
+        Please provide a comprehensive audit in VIETNAMESE (Tiếng Việt).
+        1. Calculate an Overall Health Score (0-100).
+        2. Identify 3 Key Strengths.
+        3. Identify 3 Critical Weaknesses.
+        4. Provide a step-by-step Action Plan to grow faster.
+        5. Suggest 3 specific "Viral Video Ideas" based on their best performing content.
+        6. Comment on their upload frequency.
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash", // Use Pro for better reasoning if available, else Flash
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        overallScore: { type: Type.NUMBER },
+                        strengths: { type: Type.ARRAY, items: { type: Type.STRING } },
+                        weaknesses: { type: Type.ARRAY, items: { type: Type.STRING } },
+                        actionPlan: { type: Type.ARRAY, items: { type: Type.STRING } },
+                        viralIdeas: { type: Type.ARRAY, items: { type: Type.STRING } },
+                        uploadFrequencyComment: { type: Type.STRING }
+                    }
+                }
+            }
+        });
+
+        if (response.text) return JSON.parse(response.text);
+        return null;
+    } catch (e) {
+        console.error("Audit Error:", e);
+        throw e;
+    }
+}
+
+// 5. Sentiment Analysis (NEW)
+export const analyzeCommentSentiment = async (comments: string[]): Promise<string[]> => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
+    // Batch processing
+    const prompt = `
+        Analyze the sentiment of the following YouTube comments.
+        Classify each one as strictly one of: 'POSITIVE', 'NEGATIVE', 'SPAM', 'QUESTION', 'UNKNOWN'.
+        
+        Comments:
+        ${comments.map((c, i) => `${i + 1}. "${c}"`).join('\n')}
+        
+        Return a JSON array of strings corresponding to the indices.
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        sentiments: {
+                            type: Type.ARRAY,
+                            items: { type: Type.STRING }
+                        }
+                    }
+                }
+            }
+        });
+        
+        if (response.text) {
+            const data = JSON.parse(response.text);
+            return data.sentiments;
+        }
+        return comments.map(() => 'UNKNOWN');
+    } catch (e) {
+        console.error("Sentiment Error:", e);
+        return comments.map(() => 'UNKNOWN');
     }
 }

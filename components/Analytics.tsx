@@ -1,9 +1,10 @@
 
 import React, { useState, useEffect } from 'react';
 import { Channel, YouTubeVideoStats } from '../types';
-import { Eye, ThumbsUp, MessageSquare, TrendingUp, RefreshCw, Play, BarChart2, CalendarClock, ChevronRight, Video, Users } from 'lucide-react';
+import { Eye, ThumbsUp, MessageSquare, TrendingUp, RefreshCw, Play, BarChart2, CalendarClock, ChevronRight, Video, Users, Sparkles, Lightbulb, Target, AlertCircle } from 'lucide-react';
 import { fetchChannels, fetchSystemSettings, updateChannelStats } from '../services/supabaseService';
 import { getChannelInfo, getChannelVideos } from '../services/youtubeService';
+import { analyzeChannelPerformance, ChannelAuditResult } from '../services/geminiService';
 
 const Analytics: React.FC = () => {
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -13,6 +14,11 @@ const Analytics: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isSyncing, setIsSyncing] = useState<string | null>(null); // Channel ID being synced
   const [apiKey, setApiKey] = useState('');
+
+  // AI AUDIT STATE
+  const [activeTab, setActiveTab] = useState<'VIDEOS' | 'AUDIT'>('VIDEOS');
+  const [isAuditing, setIsAuditing] = useState(false);
+  const [auditResult, setAuditResult] = useState<ChannelAuditResult | null>(null);
 
   const loadChannels = async () => {
       setIsLoading(true);
@@ -108,6 +114,8 @@ const Analytics: React.FC = () => {
   const handleSelectChannel = async (channel: Channel) => {
       setSelectedChannel(channel);
       setChannelVideos([]); // Clear old list
+      setAuditResult(null); // Clear old audit
+      setActiveTab('VIDEOS');
       setIsLoading(true);
       try {
            if (!apiKey) throw new Error("Chưa cấu hình API Key trong Settings! Vui lòng vào cài đặt.");
@@ -136,6 +144,27 @@ const Analytics: React.FC = () => {
           alert("Lỗi tải danh sách video: " + e.message);
       } finally {
           setIsLoading(false);
+      }
+  };
+
+  const handleRunAudit = async () => {
+      if (!selectedChannel) return;
+      if (channelVideos.length === 0) return alert("Cần tải danh sách video trước khi phân tích.");
+      
+      setIsAuditing(true);
+      try {
+          const stats = {
+              subs: selectedChannel.subscriberCount,
+              views: selectedChannel.totalViews || 0,
+              videoCount: selectedChannel.videoCount || 0
+          };
+          
+          const result = await analyzeChannelPerformance(selectedChannel.name, stats, channelVideos);
+          setAuditResult(result);
+      } catch (e: any) {
+          alert("Lỗi phân tích AI: " + e.message);
+      } finally {
+          setIsAuditing(false);
       }
   };
 
@@ -254,13 +283,31 @@ const Analytics: React.FC = () => {
                           </div>
                       </div>
 
-                      {/* Video List Table */}
-                      <div className="flex-1 overflow-y-auto p-0 bg-gray-900">
-                          {isLoading && channelVideos.length === 0 ? (
-                              <div className="flex items-center justify-center h-40 text-gray-400">
-                                  <RefreshCw className="w-6 h-6 animate-spin mr-2"/> Đang tải danh sách video...
+                      {/* TABS */}
+                      <div className="flex border-b border-gray-700 bg-gray-900 px-4 pt-2">
+                          <button 
+                              onClick={() => setActiveTab('VIDEOS')}
+                              className={`px-4 py-3 text-sm font-bold border-b-2 transition flex items-center gap-2 ${activeTab === 'VIDEOS' ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-400 hover:text-white'}`}
+                          >
+                              <Video className="w-4 h-4" /> Danh sách Video
+                          </button>
+                          <button 
+                              onClick={() => setActiveTab('AUDIT')}
+                              className={`px-4 py-3 text-sm font-bold border-b-2 transition flex items-center gap-2 ${activeTab === 'AUDIT' ? 'border-purple-500 text-purple-400' : 'border-transparent text-gray-400 hover:text-white'}`}
+                          >
+                              <Sparkles className="w-4 h-4" /> AI Channel Audit
+                          </button>
+                      </div>
+
+                      {/* CONTENT */}
+                      <div className="flex-1 overflow-y-auto p-0 bg-gray-900 relative">
+                          {isLoading && (
+                              <div className="absolute inset-0 flex items-center justify-center bg-gray-900/80 z-20">
+                                  <div className="text-gray-400 flex items-center"><RefreshCw className="w-6 h-6 animate-spin mr-2"/> Đang tải dữ liệu...</div>
                               </div>
-                          ) : (
+                          )}
+
+                          {activeTab === 'VIDEOS' && (
                              <table className="w-full text-left border-collapse">
                                 <thead className="bg-gray-950 text-gray-400 text-xs uppercase sticky top-0 z-10">
                                     <tr>
@@ -305,6 +352,99 @@ const Analytics: React.FC = () => {
                                     )}
                                 </tbody>
                              </table>
+                          )}
+
+                          {activeTab === 'AUDIT' && (
+                              <div className="p-6">
+                                  {!auditResult ? (
+                                      <div className="text-center py-12">
+                                          <Sparkles className="w-16 h-16 text-purple-600 mx-auto mb-4" />
+                                          <h3 className="text-xl font-bold text-white mb-2">Phân Tích Kênh Chuyên Sâu</h3>
+                                          <p className="text-gray-400 mb-6 max-w-md mx-auto">Sử dụng AI để đánh giá hiệu suất, tìm ra điểm mạnh/yếu và đề xuất chiến lược phát triển dựa trên dữ liệu video gần đây.</p>
+                                          <button 
+                                              onClick={handleRunAudit} 
+                                              disabled={isAuditing}
+                                              className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 mx-auto disabled:opacity-50 transition transform hover:scale-105"
+                                          >
+                                              {isAuditing ? <RefreshCw className="animate-spin" /> : <Sparkles />}
+                                              {isAuditing ? 'Đang phân tích...' : 'Bắt Đầu Phân Tích Ngay'}
+                                          </button>
+                                      </div>
+                                  ) : (
+                                      <div className="space-y-6 animate-in slide-in-from-bottom-4">
+                                          {/* Score Header */}
+                                          <div className="flex items-center gap-6 bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg">
+                                              <div className={`relative w-24 h-24 flex items-center justify-center rounded-full border-4 ${auditResult.overallScore >= 80 ? 'border-green-500 text-green-500' : auditResult.overallScore >= 50 ? 'border-yellow-500 text-yellow-500' : 'border-red-500 text-red-500'}`}>
+                                                  <div className="text-center">
+                                                      <span className="text-3xl font-bold">{auditResult.overallScore}</span>
+                                                      <div className="text-[10px] uppercase font-bold">Điểm</div>
+                                                  </div>
+                                              </div>
+                                              <div className="flex-1">
+                                                  <h3 className="text-xl font-bold text-white mb-2">Nhận xét tần suất đăng tải</h3>
+                                                  <p className="text-gray-300 italic">"{auditResult.uploadFrequencyComment}"</p>
+                                              </div>
+                                              <button onClick={handleRunAudit} className="p-2 bg-gray-700 hover:bg-gray-600 rounded text-white" title="Phân tích lại">
+                                                  <RefreshCw className="w-5 h-5"/>
+                                              </button>
+                                          </div>
+
+                                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                              {/* Strengths */}
+                                              <div className="bg-gray-800 p-5 rounded-xl border border-gray-700">
+                                                  <h4 className="text-green-400 font-bold mb-4 flex items-center gap-2 uppercase text-sm"><TrendingUp className="w-4 h-4"/> Điểm Mạnh</h4>
+                                                  <ul className="space-y-2">
+                                                      {auditResult.strengths.map((s, i) => (
+                                                          <li key={i} className="flex gap-2 text-sm text-gray-300">
+                                                              <div className="mt-1 w-1.5 h-1.5 bg-green-500 rounded-full shrink-0"/>
+                                                              {s}
+                                                          </li>
+                                                      ))}
+                                                  </ul>
+                                              </div>
+
+                                              {/* Weaknesses */}
+                                              <div className="bg-gray-800 p-5 rounded-xl border border-gray-700">
+                                                  <h4 className="text-red-400 font-bold mb-4 flex items-center gap-2 uppercase text-sm"><AlertCircle className="w-4 h-4"/> Điểm Yếu</h4>
+                                                  <ul className="space-y-2">
+                                                      {auditResult.weaknesses.map((s, i) => (
+                                                          <li key={i} className="flex gap-2 text-sm text-gray-300">
+                                                              <div className="mt-1 w-1.5 h-1.5 bg-red-500 rounded-full shrink-0"/>
+                                                              {s}
+                                                          </li>
+                                                      ))}
+                                                  </ul>
+                                              </div>
+                                          </div>
+
+                                          {/* Action Plan */}
+                                          <div className="bg-blue-900/20 border border-blue-800 p-6 rounded-xl">
+                                              <h4 className="text-blue-400 font-bold mb-4 flex items-center gap-2 uppercase"><Target className="w-5 h-5"/> Kế hoạch hành động</h4>
+                                              <div className="space-y-3">
+                                                  {auditResult.actionPlan.map((action, i) => (
+                                                      <div key={i} className="flex gap-3 bg-gray-900/50 p-3 rounded border border-blue-900/50">
+                                                          <span className="font-bold text-blue-500 text-lg">{i+1}</span>
+                                                          <p className="text-gray-200 text-sm">{action}</p>
+                                                      </div>
+                                                  ))}
+                                              </div>
+                                          </div>
+
+                                          {/* Viral Ideas */}
+                                          <div className="bg-purple-900/20 border border-purple-800 p-6 rounded-xl">
+                                              <h4 className="text-purple-400 font-bold mb-4 flex items-center gap-2 uppercase"><Lightbulb className="w-5 h-5"/> Ý Tưởng Video Viral Tiếp Theo</h4>
+                                              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                                  {auditResult.viralIdeas.map((idea, i) => (
+                                                      <div key={i} className="bg-gray-900 p-4 rounded-lg border border-purple-900 hover:border-purple-600 transition">
+                                                          <Sparkles className="w-5 h-5 text-purple-500 mb-2"/>
+                                                          <p className="text-white font-medium text-sm">{idea}</p>
+                                                      </div>
+                                                  ))}
+                                              </div>
+                                          </div>
+                                      </div>
+                                  )}
+                              </div>
                           )}
                       </div>
                   </>

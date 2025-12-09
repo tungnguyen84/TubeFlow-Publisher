@@ -149,7 +149,12 @@ export enum View {
   PROXIES = 'PROXIES',
   ANALYTICS = 'ANALYTICS',
   SYSTEM_LOGS = 'SYSTEM_LOGS',
-  ADVANCED_TOOLS = 'ADVANCED_TOOLS' // NEW: Added
+  ADVANCED_TOOLS = 'ADVANCED_TOOLS',
+  // NEW VIEWS
+  GROWTH_HACKING = 'GROWTH_HACKING',
+  COMMUNITY_HUB = 'COMMUNITY_HUB',
+  SAFETY_CENTER = 'SAFETY_CENTER',
+  CONTENT_STUDIO = 'CONTENT_STUDIO'
 }
 
 // --- NEW TYPES FOR AUTO SCHEDULER ---
@@ -220,6 +225,7 @@ export interface UnifiedComment {
     channelId: string;
     channelName: string; // Mapped locally
     canReply: boolean;
+    sentiment?: 'POSITIVE' | 'NEGATIVE' | 'SPAM' | 'QUESTION' | 'UNKNOWN'; // NEW
     replies?: {
         id: string;
         authorDisplayName: string;
@@ -238,4 +244,23 @@ export interface CompetitorVideo {
     channelTitle: string;
     daysAgo: number;
     velocity?: number; // Views per day
+}
+
+// --- NEW TYPES FOR EXPANSION PACK ---
+export interface LinkAsset {
+    id: string;
+    name: string;
+    url: string;
+    description?: string;
+}
+
+export interface ABTest {
+    id: string;
+    videoId: string;
+    channelId: string;
+    variantA: { title: string, thumbnail?: string };
+    variantB: { title: string, thumbnail?: string };
+    status: 'RUNNING' | 'COMPLETED';
+    winner?: 'A' | 'B';
+    startDate: string;
 }

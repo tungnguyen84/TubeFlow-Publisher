@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { LayoutDashboard, Radio, Clapperboard, CalendarClock, Settings as SettingsIcon, LogOut, UploadCloud, Network, TrendingUp, AlertTriangle, Sparkles } from 'lucide-react';
+import { LayoutDashboard, Radio, Clapperboard, CalendarClock, Settings as SettingsIcon, LogOut, UploadCloud, Network, TrendingUp, AlertTriangle, Sparkles, Zap, MessageCircle, Shield, Film, BarChart2 } from 'lucide-react';
 import { View } from './types';
 
 // Components
@@ -14,6 +14,12 @@ import ProxyManager from './components/ProxyManager';
 import Analytics from './components/Analytics';
 import SystemLogs from './components/SystemLogs';
 import AdvancedTools from './components/AdvancedTools';
+
+// NEW COMPONENTS
+import GrowthTools from './components/GrowthTools';
+import CommunityHub from './components/CommunityHub';
+import SafetyCenter from './components/SafetyCenter';
+import ContentStudio from './components/ContentStudio';
 
 const SidebarItem = ({ 
   icon: Icon, 
@@ -64,6 +70,17 @@ const App: React.FC = () => {
         return <Settings />;
       case View.ADVANCED_TOOLS:
         return <AdvancedTools />;
+        
+      // NEW ROUTES
+      case View.GROWTH_HACKING:
+        return <GrowthTools />;
+      case View.COMMUNITY_HUB:
+        return <CommunityHub />;
+      case View.SAFETY_CENTER:
+        return <SafetyCenter />;
+      case View.CONTENT_STUDIO:
+        return <ContentStudio />;
+        
       default:
         return <Dashboard />;
     }
@@ -81,23 +98,12 @@ const App: React.FC = () => {
         </div>
 
         <nav className="flex-1 px-3 space-y-1 overflow-y-auto">
+          <div className="text-xs font-bold text-gray-500 uppercase px-4 mt-2 mb-1">Core</div>
           <SidebarItem 
             icon={LayoutDashboard} 
             label="Dashboard" 
             active={currentView === View.DASHBOARD}
             onClick={() => setCurrentView(View.DASHBOARD)}
-          />
-          <SidebarItem 
-            icon={TrendingUp} 
-            label="Analytics & A/B" 
-            active={currentView === View.ANALYTICS}
-            onClick={() => setCurrentView(View.ANALYTICS)}
-          />
-          <SidebarItem 
-            icon={Sparkles} 
-            label="Advanced Tools" 
-            active={currentView === View.ADVANCED_TOOLS}
-            onClick={() => setCurrentView(View.ADVANCED_TOOLS)}
           />
           <SidebarItem 
             icon={Radio} 
@@ -123,11 +129,43 @@ const App: React.FC = () => {
             active={currentView === View.QUEUE}
             onClick={() => setCurrentView(View.QUEUE)}
           />
+
+          <div className="text-xs font-bold text-gray-500 uppercase px-4 mt-6 mb-1">Advanced</div>
           <SidebarItem 
-            icon={AlertTriangle} 
-            label="System Health" 
-            active={currentView === View.SYSTEM_LOGS}
-            onClick={() => setCurrentView(View.SYSTEM_LOGS)}
+            icon={BarChart2} 
+            label="Growth Hacking" 
+            active={currentView === View.GROWTH_HACKING}
+            onClick={() => setCurrentView(View.GROWTH_HACKING)}
+          />
+          <SidebarItem 
+            icon={MessageCircle} 
+            label="Community Hub" 
+            active={currentView === View.COMMUNITY_HUB}
+            onClick={() => setCurrentView(View.COMMUNITY_HUB)}
+          />
+          <SidebarItem 
+            icon={Shield} 
+            label="Safety Center" 
+            active={currentView === View.SAFETY_CENTER}
+            onClick={() => setCurrentView(View.SAFETY_CENTER)}
+          />
+          <SidebarItem 
+            icon={Film} 
+            label="Content Studio" 
+            active={currentView === View.CONTENT_STUDIO}
+            onClick={() => setCurrentView(View.CONTENT_STUDIO)}
+          />
+          <SidebarItem 
+            icon={TrendingUp} 
+            label="Old Analytics" 
+            active={currentView === View.ANALYTICS}
+            onClick={() => setCurrentView(View.ANALYTICS)}
+          />
+          <SidebarItem 
+            icon={Sparkles} 
+            label="Old Tools" 
+            active={currentView === View.ADVANCED_TOOLS}
+            onClick={() => setCurrentView(View.ADVANCED_TOOLS)}
           />
         </nav>
 
@@ -139,15 +177,17 @@ const App: React.FC = () => {
             onClick={() => setCurrentView(View.PROXIES)}
           />
           <SidebarItem 
+            icon={AlertTriangle} 
+            label="System Health" 
+            active={currentView === View.SYSTEM_LOGS}
+            onClick={() => setCurrentView(View.SYSTEM_LOGS)}
+          />
+          <SidebarItem 
             icon={SettingsIcon} 
-            label="Settings & Database" 
+            label="Settings" 
             active={currentView === View.SETTINGS}
             onClick={() => setCurrentView(View.SETTINGS)}
           />
-          <button className="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium text-red-400 hover:bg-gray-800 hover:text-red-300 rounded-lg transition-colors mt-1">
-            <LogOut className="w-5 h-5" />
-            Sign Out
-          </button>
         </div>
       </aside>
 

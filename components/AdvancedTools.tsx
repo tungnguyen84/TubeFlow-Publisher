@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   MessageCircle, Sparkles, TrendingUp, Edit3, Scissors, 
@@ -599,7 +598,7 @@ const BulkEditor = () => {
                 .filter(v => v.metadata.description.includes(findText))
                 .map(v => ({
                     id: v.id,
-                    desc_template: v.metadata.description.replaceAll(findText, replaceText)
+                    desc_template: v.metadata.description.split(findText).join(replaceText)
                 }));
             
             // Execute updates one by one or bulk (Supabase bulk update requires specific setup, we do loop for safety here or map)

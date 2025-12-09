@@ -1,6 +1,6 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { Job, VideoItem, Channel, AppSettings, ScheduleTemplate, DashboardStats, ProxyItem } from '../types';
+import { Job, VideoItem, Channel, AppSettings, ScheduleTemplate, DashboardStats, ProxyItem, LinkAsset } from '../types';
 
 // FIX CỨNG KẾT NỐI
 const SUPABASE_URL = "https://yirtnjaxbtenoqbyfkxe.supabase.co";
@@ -832,6 +832,26 @@ export const saveSystemSettings = async (youtubeApiKey: string, googleClientId: 
   if (error) throw new Error(error.message);
 };
 
+// --- LINK MANAGER FUNCTIONS (NEW) ---
+export const fetchLinkAssets = async (): Promise<LinkAsset[]> => {
+    try {
+        const { data, error } = await supabaseInstance.from('link_assets').select('*').order('created_at', { ascending: false });
+        if (error) return [];
+        return data as LinkAsset[];
+    } catch {
+        return [];
+    }
+}
+
+export const saveLinkAsset = async (link: {name: string, url: string, description?: string}) => {
+    const { error } = await supabaseInstance.from('link_assets').insert(link);
+    if(error) throw new Error(error.message);
+}
+
+export const deleteLinkAsset = async (id: string) => {
+    await supabaseInstance.from('link_assets').delete().eq('id', id);
+}
+
 export const generateSchemaSQL = (): string => {
   return `
 -- 1. Enable UUID
@@ -942,6 +962,15 @@ alter table public.videos enable row level security;
 drop policy if exists "Enable all" on public.videos;
 create policy "Enable all" on public.videos for all using (true) with check (true);
 
+-- MIGRATION: VIDEOS TABLE
+DO $$
+BEGIN
+    -- Check and add 'status' if missing (Common Error Fix)
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'videos' AND column_name = 'status') THEN
+        ALTER TABLE public.videos ADD COLUMN status text default 'DRAFT';
+    END IF;
+END $$;
+
 -- 6. Table: Jobs
 create table if not exists public.upload_jobs (
   id uuid primary key default uuid_generate_v4(),
@@ -975,5 +1004,17 @@ select channel_id, count(*) as count
 from public.videos
 where status = 'DRAFT'
 group by channel_id;
+
+-- 9. Table: Link Assets (NEW)
+create table if not exists public.link_assets (
+  id uuid primary key default uuid_generate_v4(),
+  name text not null,
+  url text not null,
+  description text,
+  created_at timestamptz default now()
+);
+alter table public.link_assets enable row level security;
+drop policy if exists "Enable all" on public.link_assets;
+create policy "Enable all" on public.link_assets for all using (true) with check (true);
 `;
 };
