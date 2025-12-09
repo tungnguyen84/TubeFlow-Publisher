@@ -500,19 +500,34 @@ export const fetchErrorLogs = async (): Promise<Job[]> => {
 
 export const fetchJobs = async (daysLimit: number = 3, channelId: string | null = null, status: string | null = null): Promise<Job[]> => {
   const now = new Date();
-  const startDate = new Date(now);
-  startDate.setDate(startDate.getDate() - daysLimit);
-  const isoStartDate = startDate.toISOString();
-  const endDate = new Date(now);
-  endDate.setDate(endDate.getDate() + daysLimit);
-  const isoEndDate = endDate.toISOString();
+  let isoStartDate, isoEndDate;
+
+  if (daysLimit === 0) {
+      // Logic: TODAY strict (00:00:00 -> 23:59:59)
+      const start = new Date(now);
+      start.setHours(0, 0, 0, 0);
+      isoStartDate = start.toISOString();
+      
+      const end = new Date(now);
+      end.setHours(23, 59, 59, 999);
+      isoEndDate = end.toISOString();
+  } else {
+      // Logic: Rolling window (Past X days to Future X days)
+      const startDate = new Date(now);
+      startDate.setDate(startDate.getDate() - daysLimit);
+      isoStartDate = startDate.toISOString();
+
+      const endDate = new Date(now);
+      endDate.setDate(endDate.getDate() + daysLimit);
+      isoEndDate = endDate.toISOString();
+  }
 
   // FIX: ADD video_id, channel_id to select
   let query = supabaseInstance
     .from('upload_jobs')
     .select(`
       id, video_id, channel_id, status, scheduled_time, retries, error_log, created_at,
-      videos (filename, title_template, desc_template, tags),
+      videos (filename, file_path, title_template, desc_template, tags),
       channels (name, access_token, refresh_token, token_expires_at, client_id, client_secret, default_title, default_description, default_tags, default_folder_path)
     `)
     .gte('scheduled_time', isoStartDate)
@@ -534,7 +549,8 @@ export const fetchJobs = async (daysLimit: number = 3, channelId: string | null 
     id: row.id,
     videoId: row.video_id,
     channelId: row.channel_id,
-    videoFilename: row.videos?.filename, // Map filename
+    videoFilename: row.videos?.filename, 
+    videoFilePath: row.videos?.file_path, // Mapped file_path
     videoTitle: row.videos?.title_template || 'Video đã xóa',
     channelName: row.channels?.name || 'Kênh đã xóa',
     status: row.status,
@@ -558,7 +574,7 @@ export const fetchJobs = async (daysLimit: number = 3, channelId: string | null 
         title: row.channels?.default_title,
         description: row.channels?.default_description,
         tags: row.channels?.default_tags || [],
-        defaultFolderPath: row.channels?.default_folder_path // NEW: Mapped
+        defaultFolderPath: row.channels?.default_folder_path 
     }
   }));
 };
@@ -643,56 +659,152 @@ export const deleteScheduleTemplate = async (id: string) => {
     if (error) throw new Error(error.message);
 }
 
-// --- DASHBOARD STATS ---
-export const fetchDashboardStats = async (): Promise<DashboardStats> => {
-    const { count: totalChannels } = await supabaseInstance.from('channels').select('*', { count: 'exact', head: true });
-    const today = new Date().toISOString().split('T')[0];
-    const { count: uploadsToday } = await supabaseInstance
-        .from('upload_jobs')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'COMPLETED')
-        .gte('scheduled_time', today);
-    const { count: queuedJobs } = await supabaseInstance
-        .from('upload_jobs')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'QUEUED');
-    const { count: failedJobs } = await supabaseInstance
-        .from('upload_jobs')
-        .select('*', { count: 'exact', head: true })
-        .in('status', ['FAILED', 'QUOTA_LIMIT']);
+// --- DASHBOARD STATS (UPDATED FOR FILTERING & ERROR DETAILS) ---
+export const fetchDashboardStats = async (
+    startDate?: string, 
+    endDate?: string, 
+    channelId?: string
+): Promise<DashboardStats> => {
     
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-    const { data: recentJobs } = await supabaseInstance
-        .from('upload_jobs')
-        .select('scheduled_time')
-        .eq('status', 'COMPLETED')
-        .gte('scheduled_time', sevenDaysAgo.toISOString());
+    // 1. Determine Date Range (With Local Time Awareness)
+    // Input is "YYYY-MM-DD" which browser treats as UTC midnight if passed to new Date().
+    // We want to force it to be "Local Midnight" to capture the full day for the user.
     
+    const start = new Date();
+    const end = new Date();
+
+    if (startDate) {
+        const [y, m, d] = startDate.split('-').map(Number);
+        start.setFullYear(y, m - 1, d);
+        start.setHours(0, 0, 0, 0);
+    } else {
+        start.setHours(0, 0, 0, 0);
+    }
+
+    if (endDate) {
+        const [y, m, d] = endDate.split('-').map(Number);
+        end.setFullYear(y, m - 1, d);
+        end.setHours(23, 59, 59, 999);
+    } else {
+        end.setHours(23, 59, 59, 999);
+    }
+    
+    const isoStart = start.toISOString();
+    const isoEnd = end.toISOString();
+
+    // 2. Base Query Builder Helpers
+    const buildQuery = (statusFilter?: string | string[]) => {
+        let q = supabaseInstance.from('upload_jobs')
+            .select('channel_id, status, error_log, scheduled_time, channels(name)')
+            .gte('scheduled_time', isoStart)
+            .lte('scheduled_time', isoEnd);
+        
+        if (channelId) {
+            q = q.eq('channel_id', channelId);
+        }
+        
+        if (statusFilter) {
+            if (Array.isArray(statusFilter)) {
+                q = q.in('status', statusFilter);
+            } else {
+                q = q.eq('status', statusFilter);
+            }
+        }
+        return q;
+    };
+
+    // 3. Parallel Fetching
+    const [
+        { count: totalChannels }, // Total system channels (static)
+        { data: completedJobs }, // For success count & charts
+        { data: queuedJobs }, // Currently queued (Filtered by channel if selected)
+        { data: failedJobs } // For error analysis
+    ] = await Promise.all([
+        supabaseInstance.from('channels').select('*', { count: 'exact', head: true }),
+        buildQuery('COMPLETED'),
+        // Queued Jobs: Should filter by channel but NOT date (queued implies future/pending)
+        // If we filter queued by date, we only see jobs queued for "today".
+        // Usually dashboard "Queued" card means "Total Pending".
+        // Let's filter by channel if present, but ignore date for "Queued" card.
+        (() => {
+            let q = supabaseInstance.from('upload_jobs').select('*', { count: 'exact', head: true }).eq('status', 'QUEUED');
+            if (channelId) q = q.eq('channel_id', channelId);
+            return q;
+        })(),
+        buildQuery(['FAILED', 'QUOTA_LIMIT'])
+    ]);
+
+    // 4. Aggregations
+    
+    // Active Channels in Period (Distinct IDs in completed/failed)
+    const activeChannelIds = new Set<string>();
+    completedJobs?.forEach((j: any) => activeChannelIds.add(j.channel_id));
+    failedJobs?.forEach((j: any) => activeChannelIds.add(j.channel_id));
+
+    // Recent Activity (Chart Data - Daily breakdown within range)
     const activityMap: Record<string, number> = {};
-    for(let i=0; i<7; i++) {
-        const d = new Date();
-        d.setDate(d.getDate() - i);
-        activityMap[d.toISOString().split('T')[0]] = 0;
+    // Init dates
+    const loopDate = new Date(start);
+    // Limit loop to 30 days to prevent crash if range is huge
+    let safeGuard = 0;
+    while (loopDate <= end && safeGuard < 365) {
+        activityMap[loopDate.toISOString().split('T')[0]] = 0;
+        loopDate.setDate(loopDate.getDate() + 1);
+        safeGuard++;
     }
     
-    if (recentJobs) {
-        recentJobs.forEach((job:any) => {
-            const dateStr = new Date(job.scheduled_time).toISOString().split('T')[0];
-            if (activityMap[dateStr] !== undefined) activityMap[dateStr]++;
-        });
-    }
+    completedJobs?.forEach((job: any) => {
+        const dateStr = new Date(job.scheduled_time).toISOString().split('T')[0];
+        if (activityMap[dateStr] !== undefined) activityMap[dateStr]++;
+    });
     
     const recentActivity = Object.entries(activityMap)
         .map(([date, count]) => ({ date, count }))
         .sort((a,b) => a.date.localeCompare(b.date));
 
+    // Error Breakdown Analysis
+    const errorMap: Record<string, {count: number, details: string[]}> = {};
+    
+    failedJobs?.forEach((job: any) => {
+        let type = "Unknown Error";
+        let detail = job.error_log || "No details";
+
+        if (job.status === 'QUOTA_LIMIT') {
+            type = "Quota Limit Exceeded";
+        } else {
+            // Simple heuristics to group common errors
+            const lowerLog = detail.toLowerCase();
+            if (lowerLog.includes("token")) type = "Authentication / Token Error";
+            else if (lowerLog.includes("network") || lowerLog.includes("fetch")) type = "Network / Connection Error";
+            else if (lowerLog.includes("processing")) type = "Video Processing Error";
+            else if (lowerLog.includes("upload")) type = "Upload API Error";
+            else type = "Other Errors";
+        }
+
+        if (!errorMap[type]) {
+            errorMap[type] = { count: 0, details: [] };
+        }
+        errorMap[type].count++;
+        // Keep unique details (limit to 5 samples per type to save memory)
+        if (errorMap[type].details.length < 5 && !errorMap[type].details.includes(detail)) {
+            errorMap[type].details.push(detail);
+        }
+    });
+
+    const errorBreakdown = Object.entries(errorMap).map(([type, data]) => ({
+        type,
+        count: data.count,
+        details: data.details
+    })).sort((a,b) => b.count - a.count);
+
     return {
         totalChannels: totalChannels || 0,
-        totalUploadsToday: uploadsToday || 0,
-        queuedJobs: queuedJobs || 0,
-        failedJobs: failedJobs || 0,
-        recentActivity
+        uploadsInPeriod: completedJobs?.length || 0,
+        queuedJobs: queuedJobs?.count || 0, // Use the separate query result
+        failedInPeriod: failedJobs?.length || 0,
+        activeChannelsInPeriod: activeChannelIds.size,
+        recentActivity,
+        errorBreakdown
     };
 }
 

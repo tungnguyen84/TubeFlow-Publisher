@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Job, Channel } from '../types';
-import { Play, Pause, XCircle, RotateCw, CheckCircle2, Clock, UploadCloud, RefreshCw, Upload, AlertTriangle, ShieldAlert, Filter, Zap, FolderOpen, Trash2, Info, X, FileInput, HardDrive } from 'lucide-react';
+import { Play, Pause, XCircle, RotateCw, CheckCircle2, Clock, UploadCloud, RefreshCw, Upload, AlertTriangle, ShieldAlert, Filter, Zap, FolderOpen, Trash2, Info, X, FileInput, HardDrive, FileCode } from 'lucide-react';
 import { fetchJobs, deleteJob, updateJobStatus, updateChannelAccessTokenOnly, fetchSystemSettings, fetchChannels, updateVideoYoutubeId, clearAllQueuedJobs } from '../services/supabaseService';
 import { uploadVideoToYouTube, refreshAccessToken } from '../services/youtubeService';
 
@@ -19,6 +19,8 @@ const UploadQueue: React.FC = () => {
   const folderInputRef = useRef<HTMLInputElement>(null);
 
   // Filters
+  // Default to 0 (Today) or 3 based on preference. Let's keep 3 as initial or change to 0 if requested.
+  // User asked to add option, not necessarily change default. keeping default 3 but adding option 0.
   const [filterDays, setFilterDays] = useState(3);
   const [filterChannelId, setFilterChannelId] = useState<string>('');
   const [filterStatus, setFilterStatus] = useState<string>(''); // NEW: Status Filter
@@ -303,6 +305,79 @@ const UploadQueue: React.FC = () => {
       });
   }
 
+  // --- DOWNLOAD CLEANUP SCRIPT (NEW) ---
+  const handleDownloadCleanupScript = () => {
+      // Filter completed jobs from current view
+      const completedJobs = jobs.filter(j => j.status === 'COMPLETED');
+      if (completedJobs.length === 0) {
+          showAlert("Không có file", "Không tìm thấy video nào có trạng thái COMPLETED trong danh sách hiện tại để xóa.");
+          return;
+      }
+
+      // Generate Batch Script Content
+      let scriptContent = "@echo off\r\n";
+      scriptContent += "chcp 65001 >nul\r\n";
+      scriptContent += "echo --- TUBFLOW CLEANUP SCRIPT ---\r\n";
+      scriptContent += `echo Dang tim va xoa ${completedJobs.length} video da upload xong (COMPLETED)...\r\n`;
+      scriptContent += "echo Luu y: File chi bi xoa neu duong dan (Path) chinh xac.\r\n";
+      scriptContent += "echo.\r\n";
+
+      let validCount = 0;
+      completedJobs.forEach(job => {
+          // Use full path if available, or try to construct it roughly (though risky without full path)
+          // We prioritized adding 'file_path' to query in supabaseService, mapped to videoFilePath
+          const path = job.videoFilePath;
+          if (path) {
+              scriptContent += `del "${path}"\r\n`;
+              validCount++;
+          }
+      });
+
+      if (validCount === 0) {
+           showAlert("Thiếu đường dẫn", "Các job COMPLETED hiện tại không có thông tin đường dẫn file (File Path) trong Database. Không thể tạo script.");
+           return;
+      }
+
+      scriptContent += "echo.\r\n";
+      scriptContent += "echo Da thuc hien lenh xoa! Kiem tra lai thu muc cua ban.\r\n";
+      scriptContent += "pause\r\n";
+
+      // Download
+      const blob = new Blob([scriptContent], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `cleanup_completed_${new Date().toISOString().slice(0,10)}.bat`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      // Confirm DB Deletion
+      showConfirm(
+          "Đã tải Script", 
+          `File script (.bat) đã được tải xuống.\n\nBạn có muốn XÓA LUÔN ${validCount} job này khỏi Database không?`,
+          async () => {
+              setIsLoading(true);
+              try {
+                  // Delete strictly the completed jobs that were in the script
+                  // Ideally we delete by ID list to be safe
+                  for (const job of completedJobs) {
+                      if (job.videoFilePath) {
+                         await deleteJob(job.id);
+                      }
+                  }
+                  showAlert("Thành công", `Đã xóa ${validCount} job khỏi Database.`);
+                  loadData();
+              } catch(e: any) {
+                  showAlert("Lỗi", "Lỗi xóa DB: " + e.message);
+              } finally {
+                  setIsLoading(false);
+              }
+          }
+      );
+  }
+
   // Manual Trigger
   const handleStartUpload = (job: Job) => {
       // Cho phép thử lại cả khi lỗi Quota
@@ -393,11 +468,19 @@ const UploadQueue: React.FC = () => {
            <p className="text-gray-400 text-sm mt-1">Quản lý và Tự động hóa tiến trình đẩy video</p>
         </div>
         
-        {/* AUTO BUTTON */}
+        {/* ACTION BUTTONS */}
         <div className="flex items-center gap-3">
              <button 
+                 onClick={handleDownloadCleanupScript}
+                 className="flex items-center gap-2 px-3 py-2 bg-purple-900/30 border border-purple-800 hover:bg-purple-900/50 text-purple-400 rounded-lg text-sm transition font-medium"
+                 title="Tải script .bat để xóa file gốc của các video COMPLETED"
+             >
+                 <FileCode className="w-4 h-4" /> Tải Script Xóa
+             </button>
+
+             <button 
                  onClick={handleBulkDelete}
-                 className="flex items-center gap-2 px-3 py-2 bg-red-900/30 border border-red-800 hover:bg-red-900/50 text-red-400 rounded-lg text-sm transition"
+                 className="flex items-center gap-2 px-3 py-2 bg-red-900/30 border border-red-800 hover:bg-red-900/50 text-red-400 rounded-lg text-sm transition font-medium"
                  title="Xóa theo bộ lọc (hoặc xóa tất cả)"
              >
                  <Trash2 className="w-4 h-4" /> Dọn Dẹp / Xóa Hết
@@ -436,6 +519,7 @@ const UploadQueue: React.FC = () => {
              onChange={e => setFilterDays(Number(e.target.value))}
              className="bg-gray-900 text-white text-sm border-gray-600 rounded p-1 outline-none"
            >
+              <option value={0}>Hôm nay</option>
               <option value={1}>1 ngày gần đây</option>
               <option value={3}>3 ngày gần đây</option>
               <option value={7}>7 ngày gần đây</option>

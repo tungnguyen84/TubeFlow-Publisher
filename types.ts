@@ -104,6 +104,7 @@ export interface Job {
   channelId: string;
   videoTitle: string; 
   videoFilename?: string; // NEW: Để auto match file
+  videoFilePath?: string; // NEW: Full path for cleanup script
   channelName: string; 
   status: 'QUEUED' | 'UPLOADING' | 'COMPLETED' | 'FAILED' | 'RETRYING' | 'PAUSED' | 'QUOTA_LIMIT';
   progress: number;
@@ -167,10 +168,12 @@ export interface ScheduleTemplate {
 
 export interface DashboardStats {
     totalChannels: number;
-    totalUploadsToday: number;
+    uploadsInPeriod: number; // Renamed from totalUploadsToday for clarity
     queuedJobs: number;
-    failedJobs: number;
+    failedInPeriod: number;
+    activeChannelsInPeriod: number; // Count distinct channels uploaded in period
     recentActivity: {date: string, count: number}[];
+    errorBreakdown: { type: string, count: number, details: string[] }[]; // NEW: Detailed Error Stats
 }
 
 // --- ANALYTICS TYPES ---
