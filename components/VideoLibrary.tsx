@@ -5,7 +5,11 @@ import { FileVideo, Sparkles, Calendar, MoreVertical, Edit3, X, Save, Upload, Re
 import { generateVideoMetadata } from '../services/geminiService';
 import { fetchVideos, saveVideo, updateVideoMetadata, fetchChannels, deleteVideos } from '../services/supabaseService';
 
-const VideoLibrary: React.FC = () => {
+interface VideoLibraryProps {
+    selectedGroupId?: string;
+}
+
+const VideoLibrary: React.FC<VideoLibraryProps> = ({ selectedGroupId }) => {
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [isGenerating, setIsGenerating] = useState<string | null>(null);
@@ -62,9 +66,10 @@ const VideoLibrary: React.FC = () => {
             folder: filterFolder,
             limit: limit,
             sortBy: 'filename', // Sort by Name
-            sortOrder: sortOrder // asc or desc
+            sortOrder: sortOrder, // asc or desc
+            groupId: selectedGroupId
           }),
-          fetchChannels()
+          fetchChannels(selectedGroupId)
       ]);
       setVideos(v);
       setChannels(c);
@@ -77,7 +82,7 @@ const VideoLibrary: React.FC = () => {
 
   useEffect(() => {
     loadData();
-  }, [filterChannelId, filterStatus, limit, sortOrder]); // Reload when select filters or sort change.
+  }, [filterChannelId, filterStatus, limit, sortOrder, selectedGroupId]); // Reload when select filters or sort change.
 
   // --- SELECTION LOGIC ---
   const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {

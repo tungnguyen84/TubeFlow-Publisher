@@ -5,7 +5,11 @@ import { Play, Pause, XCircle, RotateCw, CheckCircle2, Clock, UploadCloud, Refre
 import { fetchJobs, deleteJob, updateJobStatus, updateChannelAccessTokenOnly, fetchSystemSettings, fetchChannels, updateVideoYoutubeId, clearAllQueuedJobs } from '../services/supabaseService';
 import { uploadVideoToYouTube, refreshAccessToken } from '../services/youtubeService';
 
-const UploadQueue: React.FC = () => {
+interface UploadQueueProps {
+    selectedGroupId?: string;
+}
+
+const UploadQueue: React.FC<UploadQueueProps> = ({ selectedGroupId }) => {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -19,11 +23,9 @@ const UploadQueue: React.FC = () => {
   const folderInputRef = useRef<HTMLInputElement>(null);
 
   // Filters
-  // Default to 0 (Today) or 3 based on preference. Let's keep 3 as initial or change to 0 if requested.
-  // User asked to add option, not necessarily change default. keeping default 3 but adding option 0.
   const [filterDays, setFilterDays] = useState(3);
   const [filterChannelId, setFilterChannelId] = useState<string>('');
-  const [filterStatus, setFilterStatus] = useState<string>(''); // NEW: Status Filter
+  const [filterStatus, setFilterStatus] = useState<string>('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const selectedJobRef = useRef<Job | null>(null);
@@ -51,12 +53,12 @@ const UploadQueue: React.FC = () => {
 
   const loadData = async () => {
     setIsLoading(true);
-    // Fetch channels for filter
-    const ch = await fetchChannels();
+    // Fetch channels for filter (Filtered by group if selected)
+    const ch = await fetchChannels(selectedGroupId);
     setChannels(ch);
     
     // Fetch jobs with filters
-    const jobData = await fetchJobs(filterDays, filterChannelId || null, filterStatus || null);
+    const jobData = await fetchJobs(filterDays, filterChannelId || null, filterStatus || null, selectedGroupId || null);
     setJobs(jobData);
     setIsLoading(false);
   };
@@ -65,11 +67,12 @@ const UploadQueue: React.FC = () => {
     loadData();
     const interval = setInterval(() => {
         if (!uploadingJobId) {
-            fetchJobs(filterDays, filterChannelId || null, filterStatus || null).then(setJobs);
+            // Auto refresh
+            fetchJobs(filterDays, filterChannelId || null, filterStatus || null, selectedGroupId || null).then(setJobs);
         }
     }, 15000);
     return () => clearInterval(interval);
-  }, [uploadingJobId, filterDays, filterChannelId, filterStatus]);
+  }, [uploadingJobId, filterDays, filterChannelId, filterStatus, selectedGroupId]);
 
   // --- AUTO UPLOAD LOGIC ---
   const toggleAutoMode = () => {
@@ -83,8 +86,6 @@ const UploadQueue: React.FC = () => {
               "Yêu cầu cấp quyền đọc File",
               "Database đã có danh sách video, nhưng TRÌNH DUYỆT WEB không được phép tự ý đọc file từ ổ cứng của bạn vì lý do bảo mật.\n\n👉 Bạn cần chọn lại thư mục gốc (Nơi chứa tất cả video) để cấp quyền cho ứng dụng 'nắm giữ' file thực tế trong bộ nhớ tạm (RAM) để Upload."
           );
-          // Trigger folder select after user closes alert? 
-          // We trigger click immediately for UX, message is informational.
           setTimeout(() => folderInputRef.current?.click(), 2000); 
       }
   };
@@ -131,7 +132,6 @@ const UploadQueue: React.FC = () => {
 
               // Lấy tên Folder cuối cùng từ đường dẫn DB.
               // VD: "C:\Users\Admin\Videos\KenhHaiHuoc" -> Lấy "KenhHaiHuoc"
-              // VD: "KenhHaiHuoc" -> Lấy "KenhHaiHuoc"
               const folderName = fullDbFolderPath.replace(/\\/g, '/').split('/').filter(Boolean).pop();
 
               if (!folderName) {
@@ -141,15 +141,8 @@ const UploadQueue: React.FC = () => {
 
               // Normalized Search
               const file = sourceFilesRef.current.find(f => {
-                  // f.webkitRelativePath (Chrome) returns relative path from selection root
-                  // E.g. "Root/KenhHaiHuoc/video1.mp4"
                   const browserPath = f.webkitRelativePath.replace(/\\/g, '/').toLowerCase();
-                  
-                  // Target match string: "FolderOfChannel/Filename"
-                  // E.g. "kenhhaihuoc/video1.mp4"
                   const strictSuffix = `${folderName}/${expectedFilename}`.toLowerCase();
-                  
-                  // Check if browser path ends with strict suffix
                   return browserPath.endsWith(strictSuffix);
               });
 
@@ -239,12 +232,9 @@ const UploadQueue: React.FC = () => {
           // XỬ LÝ LỖI QUOTA
           if (errorMessage.includes('exceeded the number of videos') || errorMessage.includes('QUOTA') || errorMessage.includes('quota')) {
               status = 'QUOTA_LIMIT';
-              
-              // Tùy chỉnh thông báo tiếng Việt cho lỗi cụ thể
               if (errorMessage.includes('exceeded the number of videos')) {
                   errorMessage = "Lỗi quá giới hạn upload trong ngày";
               }
-              
               if (!isAutoMode) showAlert("QUOTA LIMIT", "Kênh đã đạt giới hạn upload (Quota Limit) trong ngày. Job đã được đánh dấu LIMIT.");
           } else {
               if (!isAutoMode) showAlert("Upload Thất Bại", errorMessage);
@@ -269,25 +259,23 @@ const UploadQueue: React.FC = () => {
   };
 
   const handleBulkDelete = () => {
-      console.log("🖱️ User clicked Bulk Delete");
-      
       let criteria = [];
       if (filterChannelId) criteria.push(`Kênh: ${channels.find(c => c.id === filterChannelId)?.name}`);
       if (filterStatus) criteria.push(`Trạng thái: ${filterStatus}`);
+      if (selectedGroupId) criteria.push(`Chỉ trong Profile đang chọn`);
       
       const filterMsg = criteria.length > 0 ? criteria.join(" + ") : "TOÀN BỘ (XÓA SẠCH BẢNG)";
       const msg = `Bạn sắp XÓA DỮ LIỆU theo tiêu chí: \n[ ${filterMsg} ]\n\nHành động này không thể hoàn tác.`;
       
       showConfirm("⚠️ CẢNH BÁO NGUY HIỂM", msg, async () => {
-          console.log("🚀 Proceeding with delete...");
           setIsLoading(true);
           try {
+              // TODO: Update clearAllQueuedJobs to support groupId filtering if needed, 
+              // for now user deletes based on visible filters
               const count = await clearAllQueuedJobs(
                   filterChannelId || undefined, 
                   filterStatus || undefined
               );
-              
-              console.log("🎉 Delete finished. Count:", count);
               
               if (count === 0 || count === null) {
                   showAlert("Thông báo", "⚠️ Lệnh đã chạy nhưng không có dòng nào bị xóa.\n(Có thể do không tìm thấy dữ liệu khớp bộ lọc)");
@@ -297,7 +285,6 @@ const UploadQueue: React.FC = () => {
               
               await loadData();
           } catch (e: any) {
-              console.error("❌ Delete Exception:", e);
               showAlert("Lỗi", "Lỗi khi xóa: " + e.message);
           } finally {
               setIsLoading(false);
@@ -305,82 +292,8 @@ const UploadQueue: React.FC = () => {
       });
   }
 
-  // --- DOWNLOAD CLEANUP SCRIPT (NEW) ---
-  const handleDownloadCleanupScript = () => {
-      // Filter completed jobs from current view
-      const completedJobs = jobs.filter(j => j.status === 'COMPLETED');
-      if (completedJobs.length === 0) {
-          showAlert("Không có file", "Không tìm thấy video nào có trạng thái COMPLETED trong danh sách hiện tại để xóa.");
-          return;
-      }
-
-      // Generate Batch Script Content
-      let scriptContent = "@echo off\r\n";
-      scriptContent += "chcp 65001 >nul\r\n";
-      scriptContent += "echo --- TUBFLOW CLEANUP SCRIPT ---\r\n";
-      scriptContent += `echo Dang tim va xoa ${completedJobs.length} video da upload xong (COMPLETED)...\r\n`;
-      scriptContent += "echo Luu y: File chi bi xoa neu duong dan (Path) chinh xac.\r\n";
-      scriptContent += "echo.\r\n";
-
-      let validCount = 0;
-      completedJobs.forEach(job => {
-          // Use full path if available, or try to construct it roughly (though risky without full path)
-          // We prioritized adding 'file_path' to query in supabaseService, mapped to videoFilePath
-          const path = job.videoFilePath;
-          if (path) {
-              scriptContent += `del "${path}"\r\n`;
-              validCount++;
-          }
-      });
-
-      if (validCount === 0) {
-           showAlert("Thiếu đường dẫn", "Các job COMPLETED hiện tại không có thông tin đường dẫn file (File Path) trong Database. Không thể tạo script.");
-           return;
-      }
-
-      scriptContent += "echo.\r\n";
-      scriptContent += "echo Da thuc hien lenh xoa! Kiem tra lai thu muc cua ban.\r\n";
-      scriptContent += "pause\r\n";
-
-      // Download
-      const blob = new Blob([scriptContent], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `cleanup_completed_${new Date().toISOString().slice(0,10)}.bat`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      // Confirm DB Deletion
-      showConfirm(
-          "Đã tải Script", 
-          `File script (.bat) đã được tải xuống.\n\nBạn có muốn XÓA LUÔN ${validCount} job này khỏi Database không?`,
-          async () => {
-              setIsLoading(true);
-              try {
-                  // Delete strictly the completed jobs that were in the script
-                  // Ideally we delete by ID list to be safe
-                  for (const job of completedJobs) {
-                      if (job.videoFilePath) {
-                         await deleteJob(job.id);
-                      }
-                  }
-                  showAlert("Thành công", `Đã xóa ${validCount} job khỏi Database.`);
-                  loadData();
-              } catch(e: any) {
-                  showAlert("Lỗi", "Lỗi xóa DB: " + e.message);
-              } finally {
-                  setIsLoading(false);
-              }
-          }
-      );
-  }
-
   // Manual Trigger
   const handleStartUpload = (job: Job) => {
-      // Cho phép thử lại cả khi lỗi Quota
       if (job.status === 'COMPLETED') {
           showAlert("Thông báo", "Video này đã upload thành công rồi.");
           return;
@@ -415,7 +328,6 @@ const UploadQueue: React.FC = () => {
     }
   };
   
-  // Helper: Check if job is due
   const isJobDue = (time: string) => new Date(time) <= new Date();
 
   return (
@@ -470,14 +382,6 @@ const UploadQueue: React.FC = () => {
         
         {/* ACTION BUTTONS */}
         <div className="flex items-center gap-3">
-             <button 
-                 onClick={handleDownloadCleanupScript}
-                 className="flex items-center gap-2 px-3 py-2 bg-purple-900/30 border border-purple-800 hover:bg-purple-900/50 text-purple-400 rounded-lg text-sm transition font-medium"
-                 title="Tải script .bat để xóa file gốc của các video COMPLETED"
-             >
-                 <FileCode className="w-4 h-4" /> Tải Script Xóa
-             </button>
-
              <button 
                  onClick={handleBulkDelete}
                  className="flex items-center gap-2 px-3 py-2 bg-red-900/30 border border-red-800 hover:bg-red-900/50 text-red-400 rounded-lg text-sm transition font-medium"
@@ -566,6 +470,9 @@ const UploadQueue: React.FC = () => {
                      Chế độ Auto-Upload đang bật!
                      <span className="animate-pulse w-2 h-2 rounded-full bg-red-500"></span>
                   </h4>
+                  <p className="text-xs text-yellow-200/70 mb-2">
+                      {selectedGroupId ? "Đang chạy giới hạn trong Profile đã chọn." : "Đang chạy cho TẤT CẢ các kênh (Cẩn thận nhầm Profile/Proxy)."}
+                  </p>
                   <div className="flex gap-6 mt-2 text-sm">
                       <div className="flex flex-col">
                           <span className="text-gray-400 text-xs">Job trong hàng đợi (DB)</span>
@@ -580,9 +487,6 @@ const UploadQueue: React.FC = () => {
                           </span>
                       </div>
                   </div>
-                  <p className="text-xs text-yellow-200/50 mt-2 italic">
-                      Lưu ý: Nếu trình duyệt bị tải lại (Refresh/F5), bạn cần chọn lại folder để nạp lại file vào bộ nhớ.
-                  </p>
               </div>
           </div>
       )}
@@ -592,7 +496,7 @@ const UploadQueue: React.FC = () => {
       <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
         {jobs.length === 0 ? (
             <div className="p-8 text-center text-gray-500">
-                Không tìm thấy job nào. (Thử thay đổi bộ lọc)
+                Không tìm thấy job nào. (Kiểm tra bộ lọc hoặc Profile)
             </div>
         ) : (
             <div className="divide-y divide-gray-700">

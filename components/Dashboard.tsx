@@ -5,6 +5,10 @@ import { Activity, UploadCloud, AlertCircle, CheckCircle2, Filter, Calendar, X, 
 import { fetchDashboardStats, fetchChannels } from '../services/supabaseService';
 import { DashboardStats, Channel } from '../types';
 
+interface DashboardProps {
+    selectedGroupId?: string;
+}
+
 const StatCard = ({ title, value, icon: Icon, color, onClick, clickable }: { title: string; value: string | number; icon: any; color: string, onClick?: () => void, clickable?: boolean }) => (
   <div 
     onClick={onClick}
@@ -20,7 +24,7 @@ const StatCard = ({ title, value, icon: Icon, color, onClick, clickable }: { tit
   </div>
 );
 
-const Dashboard: React.FC = () => {
+const Dashboard: React.FC<DashboardProps> = ({ selectedGroupId }) => {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -48,8 +52,8 @@ const Dashboard: React.FC = () => {
           }
 
           const [s, c] = await Promise.all([
-              fetchDashboardStats(effectiveStart, effectiveEnd, filterChannelId || undefined),
-              fetchChannels()
+              fetchDashboardStats(effectiveStart, effectiveEnd, filterChannelId || undefined, selectedGroupId || undefined),
+              fetchChannels(selectedGroupId)
           ]);
           setStats(s);
           setChannels(c);
@@ -62,7 +66,7 @@ const Dashboard: React.FC = () => {
 
   useEffect(() => {
       loadData();
-  }, [filterChannelId, dateMode, startDate, endDate]);
+  }, [filterChannelId, dateMode, startDate, endDate, selectedGroupId]);
 
   return (
     <div className="space-y-6 relative">

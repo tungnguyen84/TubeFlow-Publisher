@@ -212,30 +212,45 @@ export const analyzeThumbnail = async (base64Image: string): Promise<{score: num
 }
 
 // 3. Trend Hunter (Search Grounding)
-export const findTrends = async (niche: string): Promise<{topic: string, reason: string}[]> => {
+export const findTrends = async (niche: string): Promise<{topic: string, volume: string, reason: string}[]> => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
-    // Using Search Grounding tool
-    const prompt = `Find 5 trending topics or news right now related to "${niche}". Explain why it is trending.`;
+    const prompt = `
+      Find 5 currently trending topics, news, or viral queries related to "${niche}" using Google Search.
+      For each trend, provide:
+      1. Topic Name (topic)
+      2. Search Volume/Interest (High/Spiking/Breakout) (volume)
+      3. Why it's trending (context) (reason)
+      
+      Return the result STRICTLY as a raw JSON array. Do not wrap it in markdown code blocks.
+      Example: [{"topic": "...", "volume": "...", "reason": "..."}]
+    `;
 
     try {
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
             contents: prompt,
             config: {
-                tools: [{ googleSearch: {} }] // Enable Google Search
-                // Note: No JSON schema with Google Search usually, but we can try parsing or just return text. 
-                // For this implementation, we will ask for JSON in text.
+                tools: [{ googleSearch: {} }],
+                // responseMimeType: "application/json", // DO NOT USE with googleSearch
             }
         });
 
-        // Since Grounding might not return perfect JSON when forced, we will extract text and try to parse or return raw.
-        // Let's rely on standard text gen with search context.
-        return [
-            { topic: "Trend Analysis", reason: response.text || "See Google Search results." }
-        ];
+        if (response.text) {
+             try {
+                 // Remove markdown if present
+                 const cleanText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
+                 return JSON.parse(cleanText);
+             } catch {
+                 // Fallback: Try to extract JSON array from text if Search tool polluted it
+                 const match = response.text.match(/\[.*\]/s);
+                 if (match) return JSON.parse(match[0]);
+             }
+        }
+        return [];
     } catch (e) {
-        return [{ topic: "Error", reason: "Could not fetch trends." }];
+        console.error("Trend Error:", e);
+        return [];
     }
 }
 
@@ -339,5 +354,32 @@ export const analyzeCommentSentiment = async (comments: string[]): Promise<strin
     } catch (e) {
         console.error("Sentiment Error:", e);
         return comments.map(() => 'UNKNOWN');
+    }
+}
+
+// 6. Script Writer (NEW for Content Studio)
+export const generateVideoScript = async (topic: string): Promise<string> => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const prompt = `
+        Write a detailed YouTube Video Script for the topic: "${topic}".
+        Language: Vietnamese (Tiếng Việt).
+        Structure:
+        1. Hook (0-15s): Grab attention.
+        2. Intro: Brief overview.
+        3. Body: 3-5 main points with details.
+        4. Conclusion & CTA: Summary and ask to subscribe.
+        
+        Format the output clearly with headers.
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: prompt,
+        });
+        
+        return response.text || "Không thể tạo kịch bản.";
+    } catch (e) {
+        return "Lỗi AI: " + e;
     }
 }

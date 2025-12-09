@@ -5,7 +5,11 @@ import { Calendar as CalendarIcon, Clock, Check, Plus, RefreshCw, Lock, Trash2, 
 import { fetchVideos, fetchChannels, createJob, fetchScheduleTemplates, saveScheduleTemplate, deleteScheduleTemplate, updateChannelTemplate, fetchDraftCounts } from '../services/supabaseService';
 import { getBestUploadTimes } from '../services/geminiService';
 
-const Scheduler: React.FC = () => {
+interface SchedulerProps {
+    selectedGroupId?: string;
+}
+
+const Scheduler: React.FC<SchedulerProps> = ({ selectedGroupId }) => {
   const [mode, setMode] = useState<'MANUAL' | 'AUTO_SHORTS'>('AUTO_SHORTS');
   
   // COMMON DATA
@@ -62,7 +66,7 @@ const Scheduler: React.FC = () => {
     setIsLoading(true);
     try {
         const [c, t, dCounts] = await Promise.all([
-            fetchChannels(), 
+            fetchChannels(selectedGroupId), 
             fetchScheduleTemplates(),
             fetchDraftCounts()
         ]);
@@ -82,13 +86,13 @@ const Scheduler: React.FC = () => {
 
   const loadDefaultManualVideos = async () => {
       // Load ALL drafts (Limit 5000 triggers chunked loading in service)
-      const v = await fetchVideos({ status: 'DRAFT', limit: 5000 });
+      const v = await fetchVideos({ status: 'DRAFT', limit: 5000, groupId: selectedGroupId });
       setManualVideos(v);
   }
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [selectedGroupId]);
 
   // --- MANUAL MODE HANDLERS ---
   
@@ -108,10 +112,10 @@ const Scheduler: React.FC = () => {
     setIsLoadingVideos(true);
 
     try {
-        // Fetch ALL videos for this channel AND Orphan videos
+        // Fetch ALL videos for this channel AND Orphan videos (Optionally filtered by Group)
         const [chVideos, orphanVideos] = await Promise.all([
             fetchVideos({ channelId: id, status: 'DRAFT', limit: 5000 }),
-            fetchVideos({ isOrphan: true, status: 'DRAFT', limit: 5000 })
+            fetchVideos({ isOrphan: true, status: 'DRAFT', limit: 5000, groupId: selectedGroupId })
         ]);
 
         // Merge and sort

@@ -1,11 +1,12 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  MessageCircle, Sparkles, TrendingUp, Edit3, Scissors, 
-  RefreshCw, Search, Image as ImageIcon, CheckCircle2, 
-  Send, Users, Copy, ExternalLink, ThumbsUp, Eye, Calendar, Bot, Zap, Filter, AlertTriangle, XCircle, Power
+  MessageCircle, TrendingUp, Edit3, 
+  RefreshCw, Image as ImageIcon, CheckCircle2, 
+  Send, Users, Copy, ExternalLink, ThumbsUp, Eye, Calendar, Bot, Zap, Sparkles, Flame, ArrowRight
 } from 'lucide-react';
-import { Channel, UnifiedComment, CompetitorVideo, VideoItem, VideoStatus } from '../types';
-import { fetchChannels, fetchSystemSettings, fetchVideos, bulkUpdateVideos, saveVideo, updateChannelAccessTokenOnly } from '../services/supabaseService';
+import { Channel, UnifiedComment, CompetitorVideo, VideoItem, VideoStatus, View } from '../types';
+import { fetchChannels, fetchSystemSettings, fetchVideos, bulkUpdateVideos, updateChannelAccessTokenOnly } from '../services/supabaseService';
 import { fetchRecentComments, replyToComment, fetchCompetitorVideos, refreshAccessToken } from '../services/youtubeService';
 import { generateCommentReply, analyzeThumbnail, findTrends } from '../services/geminiService';
 
@@ -19,8 +20,12 @@ const TabButton = ({ icon: Icon, label, active, onClick }: any) => (
   </button>
 );
 
-const AdvancedTools: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'COMMUNITY' | 'VISION' | 'COMPETITOR' | 'BULK' | 'REPURPOSE'>('COMMUNITY');
+interface AdvancedToolsProps {
+    onNavigate?: (view: View) => void;
+}
+
+const AdvancedTools: React.FC<AdvancedToolsProps> = ({ onNavigate }) => {
+  const [activeTab, setActiveTab] = useState<'COMMUNITY' | 'VISION' | 'COMPETITOR' | 'BULK'>('COMMUNITY');
   const [channels, setChannels] = useState<Channel[]>([]);
   const [systemSettings, setSystemSettings] = useState<any>(null);
   
@@ -48,21 +53,110 @@ const AdvancedTools: React.FC = () => {
         <TabButton icon={ImageIcon} label="Thumbnail Vision" active={activeTab === 'VISION'} onClick={() => setActiveTab('VISION')} />
         <TabButton icon={TrendingUp} label="Trend & Competitors" active={activeTab === 'COMPETITOR'} onClick={() => setActiveTab('COMPETITOR')} />
         <TabButton icon={Edit3} label="Bulk Editor" active={activeTab === 'BULK'} onClick={() => setActiveTab('BULK')} />
-        <TabButton icon={Scissors} label="Video Repurpose" active={activeTab === 'REPURPOSE'} onClick={() => setActiveTab('REPURPOSE')} />
       </div>
 
       <div className="min-h-[500px]">
         {activeTab === 'COMMUNITY' && <CommunityManager channels={channels} settings={systemSettings} />}
         {activeTab === 'VISION' && <ThumbnailVision />}
-        {activeTab === 'COMPETITOR' && <CompetitorTracker settings={systemSettings} />}
+        {activeTab === 'COMPETITOR' && (
+            <div className="space-y-8 animate-in slide-in-from-bottom-2">
+                <TrendPulse onNavigate={onNavigate} />
+                <CompetitorTracker settings={systemSettings} />
+            </div>
+        )}
         {activeTab === 'BULK' && <BulkEditor />}
-        {activeTab === 'REPURPOSE' && <RepurposeTool channels={channels} />}
       </div>
     </div>
   );
 };
 
 // --- SUB COMPONENTS ---
+
+// 0. Trend Pulse (NEW)
+const TrendPulse = ({ onNavigate }: { onNavigate?: (view: View) => void }) => {
+    const [niche, setNiche] = useState('');
+    const [trends, setTrends] = useState<{topic: string, volume: string, reason: string}[]>([]);
+    const [isLoading, setIsLoading] = useState(false);
+
+    const handleFindTrends = async () => {
+        if (!niche) return alert("Nhập chủ đề cần soi Trend!");
+        setIsLoading(true);
+        try {
+            const results = await findTrends(niche);
+            setTrends(results);
+        } catch (e: any) {
+            alert(e.message);
+        } finally {
+            setIsLoading(false);
+        }
+    }
+
+    const handleCreateScript = (topic: string) => {
+        // Simple data passing via localStorage
+        localStorage.setItem('draft_topic', topic);
+        if (onNavigate) {
+            onNavigate(View.CONTENT_STUDIO);
+        } else {
+            alert("Đã copy chủ đề! Hãy chuyển qua Content Studio để viết kịch bản.");
+        }
+    }
+
+    return (
+        <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 relative overflow-hidden">
+             {/* Background Decoration */}
+             <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
+                 <Flame className="w-32 h-32 text-orange-500" />
+             </div>
+
+             <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                 <Flame className="w-5 h-5 text-orange-500" />
+                 Trend Pulse (Google Search Grounding)
+             </h3>
+             <p className="text-sm text-gray-400 mb-4">Sử dụng Google Search để tìm kiếm các chủ đề nóng hổi theo thời gian thực.</p>
+
+             <div className="flex gap-2 mb-6">
+                 <input 
+                    value={niche}
+                    onChange={e => setNiche(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleFindTrends()}
+                    className="flex-1 bg-gray-900 border border-gray-600 rounded p-2 text-white placeholder-gray-500"
+                    placeholder="Nhập ngách của bạn (VD: AI News, Crypto, Cooking...)"
+                 />
+                 <button 
+                    onClick={handleFindTrends}
+                    disabled={isLoading}
+                    className="bg-orange-600 hover:bg-orange-700 text-white px-6 rounded font-bold flex items-center gap-2 disabled:opacity-50"
+                 >
+                     {isLoading ? <RefreshCw className="animate-spin w-4 h-4"/> : <Zap className="w-4 h-4" />}
+                     Săn Trend
+                 </button>
+             </div>
+
+             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                 {trends.map((t, i) => (
+                     <div key={i} className="bg-gray-900 border border-gray-700 p-4 rounded-lg hover:border-orange-500 transition group">
+                         <div className="flex justify-between items-start mb-2">
+                             <h4 className="font-bold text-white line-clamp-2">{t.topic}</h4>
+                             <span className="text-[10px] bg-red-900/30 text-red-400 px-2 py-1 rounded uppercase font-bold whitespace-nowrap">{t.volume}</span>
+                         </div>
+                         <p className="text-xs text-gray-400 mb-4 line-clamp-3">{t.reason}</p>
+                         <button 
+                            onClick={() => handleCreateScript(t.topic)}
+                            className="w-full py-2 bg-gray-800 hover:bg-blue-600 text-gray-300 hover:text-white rounded text-xs font-bold transition flex items-center justify-center gap-2"
+                         >
+                             <Edit3 className="w-3 h-3" /> Viết Kịch Bản Ngay
+                         </button>
+                     </div>
+                 ))}
+                 {trends.length === 0 && !isLoading && (
+                     <div className="col-span-full text-center py-8 text-gray-600 italic border border-dashed border-gray-800 rounded">
+                         Kết quả sẽ hiển thị ở đây...
+                     </div>
+                 )}
+             </div>
+        </div>
+    )
+}
 
 // 1. Unified Community
 const CommunityManager = ({ channels, settings }: { channels: Channel[], settings: any }) => {
@@ -240,24 +334,6 @@ const CommunityManager = ({ channels, settings }: { channels: Channel[], setting
     // Nếu đã chạy -> không chạy chồng
     if (isAutoReplyRunningRef.current) return;
 
-    const runAutoReplyLoop = async () => {
-        isAutoReplyRunningRef.current = true;
-        
-        while (isAutoReplyActive && isAutoReplyRunningRef.current) {
-            // Lấy danh sách comment HIỆN TẠI trong state (mới nhất)
-            // Lưu ý: Trong React useEffect closure, 'comments' có thể cũ. 
-            // Ở đây ta dùng functional update hoặc ref nếu cần.
-            // Để đơn giản, ta sẽ chỉ lấy comment đầu tiên trong list chưa có replyText
-            
-            // Tìm comment chưa trả lời (ưu tiên cái đang hiển thị)
-            // Ta cần truy cập state mới nhất, ở đây dùng hack đơn giản:
-            // Tạm thời chỉ xử lý từng cái, sau mỗi lần xử lý component re-render -> loop tiếp tục
-            // Tuy nhiên vì while loop chặn render, ta phải dùng logic khác.
-            // SOLUTION: Dùng Interval hoặc Recursive Timeout.
-            break; 
-        }
-    };
-    
     // START INTERVAL LOOP
     const timer = setInterval(async () => {
         if (!isAutoReplyActive) return;
@@ -655,65 +731,5 @@ const BulkEditor = () => {
         </div>
     )
 };
-
-// 5. Repurpose Tool (Simple Mockup for Metadata)
-const RepurposeTool = ({ channels }: { channels: Channel[] }) => {
-    const [file, setFile] = useState<File | null>(null);
-    const [startTime, setStartTime] = useState("00:00");
-    const [endTime, setEndTime] = useState("00:59");
-    const [title, setTitle] = useState("");
-    
-    const handleGenerate = async () => {
-        if (!file || !title) return;
-        // Logic: Create a new Draft video with Shorts metadata
-        // Since we can't cut video in browser easily, we mark it.
-        const desc = `Short cut from ${file.name}. Time: ${startTime} - ${endTime}.\n#Shorts #Viral`;
-        
-        try {
-            await saveVideo({
-                filename: `SHORT_${file.name}`,
-                filePath: "Pending Cut/Render", // Placeholder
-                resolution: "9:16",
-                status: VideoStatus.DRAFT, // Explicit enum use
-                channelId: undefined,
-                metadata: {
-                    title: title + " #Shorts",
-                    description: desc,
-                    tags: ["Shorts", "Viral"],
-                    visibility: 'private'
-                }
-            });
-            alert("Đã tạo Draft cho Short! Hãy render file video tương ứng và dùng tính năng Import để thay thế file placeholder.");
-        } catch (e: any) {
-            alert("Error: " + e.message);
-        }
-    };
-
-    return (
-        <div className="max-w-xl mx-auto bg-gray-800 p-8 rounded-xl border border-gray-700 space-y-4">
-             <h3 className="font-bold text-white text-lg">Tạo Metadata cho Shorts từ Video dài</h3>
-             <p className="text-gray-400 text-sm">Tool này sẽ giúp bạn lên kế hoạch cắt Short. Nó tạo ra bản ghi Draft để bạn nhớ render.</p>
-             
-             <input type="file" onChange={e => setFile(e.target.files?.[0] || null)} className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:bg-blue-900 file:text-blue-400 hover:file:bg-blue-800"/>
-             
-             <div className="flex gap-4">
-                 <div>
-                     <label className="text-xs text-gray-400">Start</label>
-                     <input value={startTime} onChange={e => setStartTime(e.target.value)} className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white"/>
-                 </div>
-                 <div>
-                     <label className="text-xs text-gray-400">End</label>
-                     <input value={endTime} onChange={e => setEndTime(e.target.value)} className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white"/>
-                 </div>
-             </div>
-
-             <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Short Title..." className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white"/>
-
-             <button onClick={handleGenerate} className="w-full bg-red-600 hover:bg-red-700 text-white py-2 rounded font-bold">
-                 Generate Short Draft
-             </button>
-        </div>
-    )
-}
 
 export default AdvancedTools;

@@ -1,7 +1,8 @@
 
-import React, { useState } from 'react';
-import { LayoutDashboard, Radio, Clapperboard, CalendarClock, Settings as SettingsIcon, LogOut, UploadCloud, Network, TrendingUp, AlertTriangle, Sparkles, Zap, MessageCircle, Shield, Film, BarChart2 } from 'lucide-react';
-import { View } from './types';
+import React, { useState, useEffect } from 'react';
+import { LayoutDashboard, Radio, Clapperboard, CalendarClock, Settings as SettingsIcon, LogOut, UploadCloud, Network, TrendingUp, AlertTriangle, Sparkles, Zap, MessageCircle, Shield, Film, BarChart2, Layers } from 'lucide-react';
+import { View, ChannelGroup } from './types';
+import { fetchChannelGroups } from './services/supabaseService';
 
 // Components
 import Dashboard from './components/Dashboard';
@@ -10,7 +11,6 @@ import VideoLibrary from './components/VideoLibrary';
 import Scheduler from './components/Scheduler';
 import UploadQueue from './components/UploadQueue';
 import Settings from './components/Settings';
-import ProxyManager from './components/ProxyManager';
 import Analytics from './components/Analytics';
 import SystemLogs from './components/SystemLogs';
 import AdvancedTools from './components/AdvancedTools';
@@ -47,21 +47,36 @@ const SidebarItem = ({
 
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<View>(View.DASHBOARD);
+  
+  // GLOBAL FILTER STATE (App-Level)
+  const [activeGroupId, setActiveGroupId] = useState<string>(() => localStorage.getItem('activeGroupId') || '');
+  const [groups, setGroups] = useState<ChannelGroup[]>([]);
+
+  useEffect(() => {
+      // Load Groups for Selector
+      fetchChannelGroups().then(setGroups);
+  }, []);
+
+  const handleGroupChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const newVal = e.target.value;
+      setActiveGroupId(newVal);
+      localStorage.setItem('activeGroupId', newVal);
+      // Optional: Refresh data by forcing remount or passing prop
+  }
 
   const renderContent = () => {
+    // Inject activeGroupId into components
     switch (currentView) {
       case View.DASHBOARD:
-        return <Dashboard />;
+        return <Dashboard selectedGroupId={activeGroupId} />;
       case View.CHANNELS:
-        return <ChannelManager />;
+        return <ChannelManager selectedGroupId={activeGroupId} />;
       case View.VIDEOS:
-        return <VideoLibrary />;
+        return <VideoLibrary selectedGroupId={activeGroupId} />;
       case View.SCHEDULER:
-        return <Scheduler />;
+        return <Scheduler selectedGroupId={activeGroupId} />;
       case View.QUEUE:
-        return null; // Rendered persistently outside switch
-      case View.PROXIES:
-        return <ProxyManager />;
+        return null; // Rendered persistently
       case View.ANALYTICS:
         return <Analytics />;
       case View.SYSTEM_LOGS:
@@ -69,9 +84,8 @@ const App: React.FC = () => {
       case View.SETTINGS:
         return <Settings />;
       case View.ADVANCED_TOOLS:
-        return <AdvancedTools />;
+        return <AdvancedTools onNavigate={setCurrentView} />;
         
-      // NEW ROUTES
       case View.GROWTH_HACKING:
         return <GrowthTools />;
       case View.COMMUNITY_HUB:
@@ -82,7 +96,7 @@ const App: React.FC = () => {
         return <ContentStudio />;
         
       default:
-        return <Dashboard />;
+        return <Dashboard selectedGroupId={activeGroupId} />;
     }
   };
 
@@ -95,6 +109,26 @@ const App: React.FC = () => {
             TF
           </div>
           <h1 className="text-xl font-bold tracking-tight text-white">TubeFlow</h1>
+        </div>
+
+        {/* --- GLOBAL PROFILE SELECTOR --- */}
+        <div className="px-4 mb-4">
+            <div className="bg-gray-800 rounded-lg border border-gray-700 p-2">
+                <label className="text-[10px] text-gray-500 font-bold uppercase flex items-center gap-1 mb-1">
+                    <Layers className="w-3 h-3" /> Profile / Nhóm Kênh
+                </label>
+                <select 
+                    value={activeGroupId} 
+                    onChange={handleGroupChange}
+                    className="w-full bg-gray-900 text-white text-xs border border-gray-600 rounded p-1.5 outline-none focus:border-blue-500"
+                >
+                    <option value="">-- Tất cả Profile --</option>
+                    {groups.map(g => (
+                        <option key={g.id} value={g.id}>{g.name}</option>
+                    ))}
+                </select>
+                {activeGroupId && <div className="text-[10px] text-green-500 mt-1 text-center">● Đang lọc theo nhóm</div>}
+            </div>
         </div>
 
         <nav className="flex-1 px-3 space-y-1 overflow-y-auto">
@@ -170,12 +204,6 @@ const App: React.FC = () => {
         </nav>
 
         <div className="p-3 border-t border-gray-800">
-           <SidebarItem 
-            icon={Network} 
-            label="Proxy Manager" 
-            active={currentView === View.PROXIES}
-            onClick={() => setCurrentView(View.PROXIES)}
-          />
           <SidebarItem 
             icon={AlertTriangle} 
             label="System Health" 
@@ -195,8 +223,9 @@ const App: React.FC = () => {
       <main className="flex-1 overflow-y-auto relative bg-gray-950">
         <div className="max-w-7xl mx-auto p-8">
           {/* Persistent UploadQueue: Keeps running even when hidden */}
+          {/* Important: Pass activeGroupId here so Auto Upload respects it */}
           <div className={currentView === View.QUEUE ? 'block' : 'hidden'}>
-            <UploadQueue />
+            <UploadQueue selectedGroupId={activeGroupId} />
           </div>
           
           {/* Other Views */}

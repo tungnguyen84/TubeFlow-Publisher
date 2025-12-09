@@ -15,16 +15,11 @@ export enum VideoStatus {
   FAILED = 'FAILED'
 }
 
-export interface ProxyItem {
+export interface ChannelGroup {
   id: string;
-  ip: string;
-  port: number;
-  username?: string;
-  password?: string;
-  protocol: 'http' | 'https' | 'socks4' | 'socks5';
-  status: 'ACTIVE' | 'DEAD' | 'UNKNOWN';
-  lastChecked?: string;
-  location?: string; // VD: US, VN
+  name: string;
+  description?: string;
+  created_at?: string;
 }
 
 export interface Channel {
@@ -32,7 +27,8 @@ export interface Channel {
   name: string;
   avatarUrl: string;
   subscriberCount: number;
-  groupId: string | null;
+  groupId: string | null; // ID của nhóm
+  groupName?: string; // Tên nhóm (mapped)
   status: ChannelStatus;
   lastSync: string;
   tags: string[];
@@ -60,16 +56,6 @@ export interface Channel {
   
   // Schedule Binding
   currentTemplateId?: string; // ID của lịch mẫu đang áp dụng cho kênh này
-  
-  // Proxy Binding
-  proxyId?: string;
-  proxyIP?: string; // Để hiển thị nhanh
-}
-
-export interface ChannelGroup {
-  id: string;
-  name: string;
-  niche: string;
 }
 
 export interface VideoMetadata {
@@ -146,7 +132,6 @@ export enum View {
   SCHEDULER = 'SCHEDULER',
   QUEUE = 'QUEUE',
   SETTINGS = 'SETTINGS',
-  PROXIES = 'PROXIES',
   ANALYTICS = 'ANALYTICS',
   SYSTEM_LOGS = 'SYSTEM_LOGS',
   ADVANCED_TOOLS = 'ADVANCED_TOOLS',
@@ -263,4 +248,17 @@ export interface ABTest {
     status: 'RUNNING' | 'COMPLETED';
     winner?: 'A' | 'B';
     startDate: string;
+}
+
+// --- PROXY TYPES ---
+export interface ProxyItem {
+    id: string;
+    ip: string;
+    port: number;
+    protocol: 'http' | 'https' | 'socks4' | 'socks5';
+    username?: string;
+    password?: string;
+    location?: string;
+    status: string; // 'ACTIVE' | 'DEAD' ...
+    created_at?: string;
 }
