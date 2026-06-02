@@ -287,13 +287,14 @@ const ChannelManager: React.FC<ChannelManagerProps> = ({ selectedGroupId }) => {
 
   const handleFolderScan = async (e: React.ChangeEvent<HTMLInputElement>) => {
       if (!e.target.files || !editingChannel) return;
-      const videoFiles = Array.from(e.target.files).filter(f => f.type.startsWith('video/'));
+      // Fixed: explicitly typed f as any to avoid unknown type error from Array.from on FileList
+      const videoFiles = Array.from(e.target.files).filter((f: any) => f.type.startsWith('video/'));
       if (videoFiles.length === 0) return showAlert("Thông báo", "Không có video nào trong thư mục này.");
       
       setIsScanning(true);
       setScanStatus(`Reading ${videoFiles.length} files...`);
       try {
-          await syncVideosForChannel(editingChannel.id, defaultFolderPath || 'ImportedFolder', videoFiles.map(f => ({ name: f.name })));
+          await syncVideosForChannel(editingChannel.id, defaultFolderPath || 'ImportedFolder', videoFiles.map((f: any) => ({ name: f.name })));
           setScanStatus(`✅ Synced ${videoFiles.length} videos!`);
            // @ts-ignore
           if (!defaultFolderPath && videoFiles[0].webkitRelativePath) {

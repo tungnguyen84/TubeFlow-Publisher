@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Job, Channel } from '../types';
-import { Play, Pause, XCircle, RotateCw, CheckCircle2, Clock, UploadCloud, RefreshCw, Upload, AlertTriangle, ShieldAlert, Filter, Zap, FolderOpen, Trash2, Info, X, FileInput, HardDrive, FileCode } from 'lucide-react';
+import { Play, Pause, XCircle, RotateCw, CheckCircle2, Clock, UploadCloud, RefreshCw, Upload, AlertTriangle, ShieldAlert, Filter, Zap, FolderOpen, Trash2, Info, X, FileInput, HardDrive, FileCode, FileDown } from 'lucide-react';
 import { fetchJobs, deleteJob, updateJobStatus, updateChannelAccessTokenOnly, fetchSystemSettings, fetchChannels, updateVideoYoutubeId, clearAllQueuedJobs } from '../services/supabaseService';
 import { uploadVideoToYouTube, refreshAccessToken } from '../services/youtubeService';
 
@@ -258,39 +258,86 @@ const UploadQueue: React.FC<UploadQueueProps> = ({ selectedGroupId }) => {
     });
   };
 
-  const handleBulkDelete = () => {
-      let criteria = [];
-      if (filterChannelId) criteria.push(`Kênh: ${channels.find(c => c.id === filterChannelId)?.name}`);
-      if (filterStatus) criteria.push(`Trạng thái: ${filterStatus}`);
-      if (selectedGroupId) criteria.push(`Chỉ trong Profile đang chọn`);
+  const handleDownloadCleanupScript = async () => {
+      setIsLoading(true);
       
-      const filterMsg = criteria.length > 0 ? criteria.join(" + ") : "TOÀN BỘ (XÓA SẠCH BẢNG)";
-      const msg = `Bạn sắp XÓA DỮ LIỆU theo tiêu chí: \n[ ${filterMsg} ]\n\nHành động này không thể hoàn tác.`;
-      
-      showConfirm("⚠️ CẢNH BÁO NGUY HIỂM", msg, async () => {
-          setIsLoading(true);
-          try {
-              // TODO: Update clearAllQueuedJobs to support groupId filtering if needed, 
-              // for now user deletes based on visible filters
-              const count = await clearAllQueuedJobs(
-                  filterChannelId || undefined, 
-                  filterStatus || undefined
-              );
-              
-              if (count === 0 || count === null) {
-                  showAlert("Thông báo", "⚠️ Lệnh đã chạy nhưng không có dòng nào bị xóa.\n(Có thể do không tìm thấy dữ liệu khớp bộ lọc)");
-              } else {
-                  showAlert("Thành công", `✅ Đã xóa thành công ${count} job!`);
-              }
-              
-              await loadData();
-          } catch (e: any) {
-              showAlert("Lỗi", "Lỗi khi xóa: " + e.message);
-          } finally {
+      try {
+          // 1. Fetch COMPLETED jobs only (regardless of current view status filter, but respecting date/channel/group)
+          // We want to clean up things that are actually done.
+          const completedJobs = await fetchJobs(
+              filterDays || 30, // Default to 30 days lookback if filter is not set strictly
+              filterChannelId || null, 
+              'COMPLETED', 
+              selectedGroupId || null
+          );
+
+          if (completedJobs.length === 0) {
+              showAlert("Thông báo", "Không tìm thấy video nào đã hoàn thành (COMPLETED) trong khoảng thời gian này để tạo script.");
               setIsLoading(false);
+              return;
           }
-      });
-  }
+
+          // 2. Generate Batch Script Content
+          // chcp 65001 to support UTF-8 (Vietnamese characters)
+          let scriptContent = '@echo off\r\n';
+          scriptContent += 'chcp 65001 >nul\r\n';
+          scriptContent += 'echo ========================================================\r\n';
+          scriptContent += 'echo   TUBEFLOW - SCRIPT XOA FILE VIDEO DA UPLOAD (COMPLETED) \r\n';
+          scriptContent += 'echo ========================================================\r\n';
+          scriptContent += `echo Found: ${completedJobs.length} completed jobs.\r\n`;
+          scriptContent += 'echo Luu y: Script nay se xoa file vinh vien tren o cung.\r\n';
+          scriptContent += 'pause\r\n\r\n';
+
+          let count = 0;
+          completedJobs.forEach(job => {
+              // Construct path: use database filePath if available, else try to construct from metadata
+              // Note: Database filePath is preferred as it was saved during import.
+              let pathToDelete = job.videoFilePath;
+              
+              if (!pathToDelete && job.channelDefaultMetadata?.defaultFolderPath && job.videoFilename) {
+                   // Fallback logic
+                   const folder = job.channelDefaultMetadata.defaultFolderPath.endsWith('\\') || job.channelDefaultMetadata.defaultFolderPath.endsWith('/')
+                       ? job.channelDefaultMetadata.defaultFolderPath
+                       : job.channelDefaultMetadata.defaultFolderPath + '\\';
+                   pathToDelete = folder + job.videoFilename;
+              }
+
+              if (pathToDelete) {
+                  // Wrap path in quotes to handle spaces
+                  scriptContent += `del "${pathToDelete}"\r\n`;
+                  count++;
+              }
+          });
+
+          if (count === 0) {
+              scriptContent += 'echo Khong tim thay duong dan file hop le trong Database.\r\n';
+          }
+
+          scriptContent += '\r\necho.\r\necho ========================================================\r\n';
+          scriptContent += 'echo   DA HOAN THANH!\r\n';
+          scriptContent += 'echo ========================================================\r\n';
+          scriptContent += 'pause\r\n';
+
+          // 3. Trigger Download
+          const blob = new Blob([scriptContent], { type: 'text/plain' });
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `cleanup_completed_videos_${new Date().toISOString().slice(0,10)}.bat`;
+          document.body.appendChild(a);
+          a.click();
+          
+          window.URL.revokeObjectURL(url);
+          document.body.removeChild(a);
+
+          showAlert("Thành công", `Đã tạo script xóa cho ${count} video!\nFile .bat đã được tải xuống máy.`);
+
+      } catch (e: any) {
+          showAlert("Lỗi", "Không thể tạo script: " + e.message);
+      } finally {
+          setIsLoading(false);
+      }
+  };
 
   // Manual Trigger
   const handleStartUpload = (job: Job) => {
@@ -383,11 +430,11 @@ const UploadQueue: React.FC<UploadQueueProps> = ({ selectedGroupId }) => {
         {/* ACTION BUTTONS */}
         <div className="flex items-center gap-3">
              <button 
-                 onClick={handleBulkDelete}
-                 className="flex items-center gap-2 px-3 py-2 bg-red-900/30 border border-red-800 hover:bg-red-900/50 text-red-400 rounded-lg text-sm transition font-medium"
-                 title="Xóa theo bộ lọc (hoặc xóa tất cả)"
+                 onClick={handleDownloadCleanupScript}
+                 className="flex items-center gap-2 px-3 py-2 bg-gray-800 border border-gray-600 hover:bg-gray-700 text-green-400 rounded-lg text-sm transition font-medium shadow-lg"
+                 title="Tải file .bat để xóa file video đã hoàn thành trên ổ cứng"
              >
-                 <Trash2 className="w-4 h-4" /> Dọn Dẹp / Xóa Hết
+                 <FileDown className="w-4 h-4" /> Tải Script Xóa File (Đã xong)
              </button>
 
              <button 
